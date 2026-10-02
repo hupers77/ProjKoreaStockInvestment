@@ -17,14 +17,16 @@
   <div class="tablewrap"><table>
     <tr><th class="l">종목</th><th>등급</th><th>최종</th><th>현재가</th><th>매수가</th><th>수량</th><th>수익률</th><th class="l">매수일</th><th class="l">메모</th><th></th></tr>
     {% for h in holdings %}{% set r = smap.get(h.ticker) %}
-    <tr>
+    <tr data-t="{{ h.ticker }}" data-n="{{ h.name or '' }}" data-p="{{ '%g'|format(h.buy_price) if h.buy_price is not none else '' }}"
+        data-q="{{ '%g'|format(h.qty) if h.qty is not none else '' }}" data-d="{{ h.buy_date or '' }}" data-m="{{ h.memo or '' }}">
       <td class="l"><input type="radio" class="hold" data-t="{{ h.ticker }}" data-n="{{ h.name }}" checked>
         <a href="/stock/{{ h.ticker }}"><span class="name g-{{ r.grade if r else 'C' }}">{{ h.name or h.ticker }}</span></a> <span class="muted small">{{ h.ticker }}</span></td>
       <td>{{ grade_info[r.grade][0] if r else '-' }}</td><td>{{ r.final|num(1) if r else '-' }}</td>
-      <td>{{ r.close|num if r else '-' }}</td><td>{{ h.buy_price|num }}</td><td>{{ h.qty|num }}</td>
+      <td>{{ r.close|num if r else '-' }}</td><td class="e-p">{{ h.buy_price|num }}</td><td class="e-q">{{ h.qty|num }}</td>
       <td>{% if r and h.buy_price %}{% set ret=(r.close/h.buy_price-1)*100 %}<span class="{{ 'up' if ret>0 else 'down' }}">{{ '%+.1f%%'|format(ret) }}</span>{% else %}-{% endif %}</td>
-      <td class="l">{{ h.buy_date or '' }}</td><td class="l small">{{ h.memo or '' }}</td>
-      <td><form method="post" action="/api/holding" onsubmit="return confirm('보유 목록에서 삭제할까요?')"><input type="hidden" name="ticker" value="{{ h.ticker }}"><input type="hidden" name="delete" value="1"><button class="btn">삭제</button></form></td>
+      <td class="l">{{ h.buy_date or '' }}</td><td class="l small e-m">{{ h.memo or '' }}</td>
+      <td style="white-space:nowrap"><form method="post" action="/api/holding" style="display:inline" onsubmit="return confirm('보유 목록에서 삭제할까요?')"><input type="hidden" name="ticker" value="{{ h.ticker }}"><input type="hidden" name="delete" value="1"><button class="btn">삭제</button></form>
+        <button class="btn e-btn" type="button" onclick="editHolding(this)">수정</button></td>
     </tr>
     {% else %}<tr><td colspan="10" class="l muted">등록된 보유 종목이 없습니다.</td></tr>{% endfor %}
   </table></div>
@@ -61,5 +63,33 @@ function fillName(el) {
   if (hit) el.form.querySelector('[name=name]').value = hit.name;
 }
 window.onHoldChanged = () => location.reload();
+const escA = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+// 보유 종목 행을 그 자리에서 편집 (매수가·수량·메모)
+function editHolding(btn) {
+  const tr = btn.closest('tr'), d = tr.dataset;
+  if (tr.classList.contains('editing')) return;
+  tr.classList.add('editing');
+  tr.querySelector('.e-p').innerHTML = `<input type="text" class="i-p" value="${escA(d.p)}" placeholder="매수가" style="width:100px">`;
+  tr.querySelector('.e-q').innerHTML = `<input type="text" class="i-q" value="${escA(d.q)}" placeholder="수량" style="width:70px">`;
+  tr.querySelector('.e-m').innerHTML = `<input type="text" class="i-m" value="${escA(d.m)}" placeholder="메모" style="width:160px">`;
+  btn.outerHTML = '<button class="btn primary" type="button" onclick="saveHolding(this)">저장</button> <button class="btn" type="button" onclick="location.reload()">취소</button>';
+  tr.querySelector('.i-p').focus();
+}
+function saveHolding(btn) {
+  const tr = btn.closest('tr'), d = tr.dataset;
+  const f = document.createElement('form');
+  f.method = 'post'; f.action = '/api/holding';
+  const vals = {ticker: d.t, name: d.n, buy_date: d.d, buy_price: tr.querySelector('.i-p').value,
+                qty: tr.querySelector('.i-q').value, memo: tr.querySelector('.i-m').value};
+  for (const [k, v] of Object.entries(vals)) {
+    const i = document.createElement('input'); i.type = 'hidden'; i.name = k; i.value = v; f.appendChild(i);
+  }
+  document.body.appendChild(f); f.submit();
+}
+document.addEventListener('keydown', e => {  // 편집 중 Enter = 저장
+  if (e.key === 'Enter' && e.target.closest && e.target.closest('tr.editing')) {
+    e.preventDefault(); saveHolding(e.target.closest('tr').querySelector('.btn.primary'));
+  }
+});
 </script>
 {% endblock %}
