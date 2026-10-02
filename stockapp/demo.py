@@ -37,12 +37,10 @@ def make_bundle(n=300, days=300, seed=7):
         "f_net5": mcap * rng.normal(0, 0.002, n), "f_net20": mcap * rng.normal(0, 0.006, n),
         "i_net20": mcap * rng.normal(0, 0.004, n), "i_net60": mcap * rng.normal(0, 0.008, n),
         "pension_net20": mcap * rng.normal(0, 0.001, n),
-        "foreign_now": rng.uniform(1, 50, n), "short_ratio": rng.exponential(0.6, n),
-        "short_bal": shares * rng.uniform(0, 0.01, n), "shares_5y": shares * rng.uniform(0.8, 1.05, n),
+        "foreign_now": rng.uniform(1, 50, n), "shares_5y": shares * rng.uniform(0.8, 1.05, n),
     }, index=tickers)
     info["foreign_3m"] = info["foreign_now"] - rng.normal(0, 1.2, n)
     info["foreign_6m"] = info["foreign_now"] - rng.normal(0, 2, n)
-    info["short_bal_20"] = info["short_bal"] * rng.uniform(0.7, 1.3, n)
     idx = {}
     for mk in ("KOSPI", "KOSDAQ"):
         cols = [t for t, m in zip(tickers, market) if m == mk]

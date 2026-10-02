@@ -234,7 +234,7 @@ def collect(st, log=print, with_dart=True):
             warnings.append(f"{mk} 시장 외국인 수급 실패: {e}")
     sources["수급"] = f"KRX 투자자별 순매수, {dates[-20]}~{base}"
 
-    log("외국인 지분율·공매도 잔고 수집 중…")
+    log("외국인 지분율 수집 중…")
     for col, off in (("foreign_now", 1), ("foreign_3m", 64), ("foreign_6m", 127)):
         d = all_dates[-off]
         s = pd.Series(dtype=float)
@@ -247,22 +247,6 @@ def collect(st, log=print, with_dart=True):
             except Exception as e:
                 warnings.append(f"{mk} 외국인 지분율({d}) 실패: {e}")
         info[col] = s.reindex(info.index) if len(s) else None
-    for col_r, col_b, off in (("short_ratio", "short_bal", 3), (None, "short_bal_20", 23)):
-        d = all_dates[-off]
-        r, b = pd.Series(dtype=float), pd.Series(dtype=float)
-        for mk in ("KOSPI", "KOSDAQ"):
-            try:
-                df = _retry(stock.get_shorting_balance, d, market=mk)
-                df.index = df.index.astype(str)
-                r = pd.concat([r, df["비중"].astype(float)])
-                b = pd.concat([b, df["공매도잔고"].astype(float)])
-            except Exception as e:
-                warnings.append(f"{mk} 공매도 잔고({d}) 실패: {e}")
-        if len(b):
-            if col_r:
-                info[col_r] = r.reindex(info.index).fillna(0)
-            info[col_b] = b.reindex(info.index).fillna(0)
-    sources["공매도"] = f"KRX 공매도 잔고(T+2 공시), 기준일 {all_dates[-3]}"
 
     log("과거 밸류에이션·배당 이력 수집 중…")
     pbr_hist, dps_hist = {}, {}

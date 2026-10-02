@@ -27,7 +27,7 @@
   <h2>무료 데이터 연결</h2>
   <div class="kv">
     <label>한국거래소 아이디</label><div><input type="text" name="krx_id" value="{{ st.krx_id }}" autocomplete="off">
-      <span class="small muted"><a href="https://data.krx.co.kr" target="_blank" rel="noopener">data.krx.co.kr</a> 무료 회원가입 후 입력 (시세·수급·공매도)</span></div>
+      <span class="small muted"><a href="https://data.krx.co.kr" target="_blank" rel="noopener">data.krx.co.kr</a> 무료 회원가입 후 입력 (시세·수급)</span></div>
     <label>한국거래소 비밀번호</label><div><input type="password" name="krx_pw" placeholder="{{ '저장됨 (바꿀 때만 입력)' if st.krx_pw else '' }}" autocomplete="new-password"></div>
     <label>OpenDART API 키</label><div><input type="text" name="dart_key" value="{{ st.dart_key }}" style="width:340px" autocomplete="off">
       <span class="small muted"><a href="https://opendart.fss.or.kr" target="_blank" rel="noopener">opendart.fss.or.kr</a> 무료 인증키 신청 (재무제표 항목)</span></div>

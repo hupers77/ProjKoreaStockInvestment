@@ -42,6 +42,10 @@ document.addEventListener('click', e => {
 });
 async function startScan(demo) {
   const j = await postJSON('/api/scan', {demo});
+  if (j.ok) {  // 새 스캔을 시작하면 이전 오류·경고 메시지를 지운다
+    document.querySelectorAll('.scan-msg').forEach(x => x.remove());
+    const st = document.getElementById('scan-status'); if (st) st.textContent = '';
+  }
   alert(j.message);
   if (j.ok) pollScan();
 }

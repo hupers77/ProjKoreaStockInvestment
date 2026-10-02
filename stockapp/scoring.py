@@ -324,24 +324,6 @@ def S10(t: Ctx):
     return Res(s, val, why)
 
 
-def S11(t: Ctx):
-    r, b, b20 = t.get("short_ratio"), t.get("short_bal"), t.get("short_bal_20")
-    if r is None:
-        return NA("공매도 잔고 데이터 없음")
-    chg = (b / b20 - 1) * 100 if b and b20 else (0 if not b else None)
-    dec = chg is not None and chg < -1
-    inc = chg is not None and chg > 1
-    val = f"공매도 잔고 비율 {f(r,2)}%" + (f", 20일 변화 {f(chg,0)}%" if chg is not None else "")
-    basis = " (대차잔고 대신 공매도 잔고 변화로 판단)"
-    if r >= 5 or (r >= 0.5 and chg is not None and chg >= 30):
-        return Res(0, val, "5% 이상 또는 20일 30% 이상 급증" + basis)
-    if r < 0.5:
-        return Res(10 if dec else 8, val, ("0.5% 미만 + 감소" if dec else "0.5% 미만 안정") + basis)
-    if r < 2:
-        return Res(6 if not inc else 4, val, ("0.5~2% " + ("증가" if inc else "감소·보합")) + basis)
-    return Res(2 if inc else 3, val, "2~5% " + ("증가" if inc else "감소·보합") + basis)
-
-
 def S13(t: Ctx):
     if t.n < 240:
         return NA("52주 이력 부족")
@@ -802,6 +784,9 @@ def L20(t: Ctx):
     return Res(s, f"5년 주식수 변화 {f(g)}%", "상장주식수 비교 (액면분할·병합 시 수동 확인)")
 
 
+# 사용자 요청으로 조사·채점에서 뺀 항목 (N/A 처리, 분모에서 제외)
+DISABLED = {"S11": "공매도·대차잔고 조사 제외 (사용자 결정)"}
+
 RULES = {k: v for k, v in globals().items() if k[:1] in "SML" and k[1:].isdigit() and callable(v)}
 
 
@@ -871,6 +856,7 @@ def build_universe(b: Bundle, tickers):
             s = 10 if p >= 1 else 8 if p >= 0.75 else 6 if p >= 0.5 else 4 if p >= 0.25 else 2
             basis = f"확인 가능한 {len(conds)}개 조건 중 {sum(conds)}개 충족(비율 환산)"
         u["env"][mk] = {"score": s, "value": " / ".join(notes), "basis": basis, "index": float(ix.iloc[-1]),
+                        "date": ix.index[-1].strftime("%Y%m%d"),
                         "r20": r20, "conds": notes}
     return u
 
@@ -913,7 +899,9 @@ def score_ticker(t: Ctx, st, manual):
             r = Res(float(m["score"]), m.get("value") or "수동 입력", m.get("note") or "사용자 입력", False, "수동")
         else:
             fn = RULES.get(iid)
-            if fn is None:
+            if iid in DISABLED:
+                r = NA(DISABLED[iid])
+            elif fn is None:
                 r = NA("무료 자동 데이터 없음 (상세 화면에서 수동 입력 가능)")
             else:
                 try:

@@ -15,13 +15,13 @@
     <button class="btn primary" onclick="startScan(false)" {{ 'disabled' if running }}>지금 스캔</button>
     <button class="btn" onclick="startScan(true)" {{ 'disabled' if running }}>데모 스캔</button>
   </div>
-  {% if last and last.status == 'failed' %}<div class="err" style="margin-top:10px">최근 스캔 실패: {{ last.message }}</div>{% endif %}
-  {% for w in warnings %}<div class="warn small" style="margin:8px 0 0">{{ w }}</div>{% endfor %}
+  {% if last and last.status == 'failed' %}<div class="err scan-msg" style="margin-top:10px">최근 스캔 실패: {{ last.message }}</div>{% endif %}
+  {% for w in warnings %}<div class="warn small scan-msg" style="margin:8px 0 0">{{ w }}</div>{% endfor %}
 </div>
 
 <div class="stats" style="margin-bottom:14px">
   {% for g in ['S','A','B','C','X'] %}
-  <div class="stat g-{{g}}" style="text-decoration:none"><div class="v">{{ counts[g] }}</div>
+  <div class="stat g-{{g}}" style="text-decoration:none;cursor:pointer" title="순위표를 이 등급으로 보기" onclick="pickGrade('{{g}}')"><div class="v">{{ counts[g] }}</div>
     <div class="k">{{ grade_info[g][0] }} · {{ grade_info[g][1] }} <span style="opacity:.75">({{ grade_info[g][2] }})</span></div></div>
   {% endfor %}
 </div>
@@ -31,7 +31,8 @@
   {% for mk, e in env.items() %}
   <div class="card">
     <h2>{{ mk }} 시장 환경 <span class="badge g-{{ 'A' if e.score>=8 else 'B' if e.score>=6 else 'C' }}" style="text-decoration:none">{{ e.score|num }}/10</span></h2>
-    <div class="small">지수 {{ e.index|num(2) }} · 20일 {{ e.r20|num(1) }}%</div>
+    {% set ed = e.date or scan.base_date %}
+    <div class="small">조회일 {{ ed[2:4] }}/{{ ed[4:6] }}/{{ ed[6:8] }} · 지수 {{ e.index|num(2) }} · 20일 {{ e.r20|num(1) }}%</div>
     <ul class="small" style="margin:6px 0 0;padding-left:18px">{% for c in e.conds %}<li>{{ c }}</li>{% endfor %}</ul>
   </div>
   {% endfor %}
@@ -63,8 +64,8 @@
   </table></div>{% endif %}
 </div>
 
-<div class="card">
-  <h2>종목 순위</h2>
+<div class="card" id="ranking">
+  <h2>종목 순위 <button class="btn small" style="margin-left:8px" onclick="resetFilters()">조건 초기화</button></h2>
   <div class="legend" style="margin-bottom:8px">종목명 배경색:
     {% for g in ['S','A','B','C','X'] %}<span class="name g-{{g}}">{{ grade_info[g][0] }} {{ grade_info[g][2] }}</span>{% endfor %}
     <span class="muted">· 왼쪽 라디오 = 보유 여부(누르면 등록/해제)</span>
@@ -105,6 +106,44 @@ document.querySelectorAll('#tbl th[data-k]').forEach(th => th.onclick = () => {
   document.querySelectorAll('#tbl th[data-k]').forEach(x => x.textContent = x.textContent.replace(/ [▲▼]$/, ''));
   th.textContent += sortDir < 0 ? ' ▼' : ' ▲'; render(1);
 });
+// 검색 조건을 브라우저에 저장해 다른 페이지에 다녀와도 유지한다
+const FKEY = 'rankFilters.v1';
+function saveFilters() {
+  try {
+    localStorage.setItem(FKEY, JSON.stringify({q: document.getElementById('q').value, g: document.getElementById('fg').value,
+      m: document.getElementById('fm').value, s: fs.value, h: document.getElementById('fh').checked, sortK, sortDir, page}));
+  } catch (e) {}
+}
+function loadFilters() {
+  let f = null;
+  try { f = JSON.parse(localStorage.getItem(FKEY) || 'null'); } catch (e) {}
+  if (!f) return 1;
+  document.getElementById('q').value = f.q || '';
+  document.getElementById('fg').value = f.g || '';
+  document.getElementById('fm').value = f.m || '';
+  if (f.s && secs.includes(f.s)) fs.value = f.s;
+  document.getElementById('fh').checked = !!f.h;
+  if (f.sortK) { sortK = f.sortK; sortDir = f.sortDir || -1; }
+  document.querySelectorAll('#tbl th[data-k]').forEach(x => {
+    x.textContent = x.textContent.replace(/ [▲▼]$/, '');
+    if (x.dataset.k === sortK) x.textContent += sortDir < 0 ? ' ▼' : ' ▲';
+  });
+  return f.page || 1;
+}
+function resetFilters() {
+  ['q', 'fm'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('fg').value = ''; fs.value = ''; document.getElementById('fh').checked = false;
+  sortK = 'f'; sortDir = -1;
+  document.querySelectorAll('#tbl th[data-k]').forEach(x => {
+    x.textContent = x.textContent.replace(/ [▲▼]$/, '') + (x.dataset.k === 'f' ? ' ▼' : '');
+  });
+  render(1);
+}
+function pickGrade(g) {
+  document.getElementById('fg').value = g;
+  render(1);
+  document.getElementById('ranking').scrollIntoView({behavior: 'smooth'});
+}
 function filtered() {
   const q = document.getElementById('q').value.trim().toLowerCase();
   const g = document.getElementById('fg').value, m = document.getElementById('fm').value, s = fs.value;
@@ -123,6 +162,7 @@ function render(p) {
   });
   const pages = Math.max(1, Math.ceil(rows.length / PER));
   page = Math.min(Math.max(1, p || 1), pages);
+  saveFilters();
   document.getElementById('cnt').textContent = rows.length.toLocaleString() + '종목';
   document.getElementById('pg').textContent = page + ' / ' + pages;
   document.querySelector('#tbl tbody').innerHTML = rows.slice((page-1)*PER, page*PER).map(r => `
@@ -140,7 +180,7 @@ function render(p) {
     </tr>`).join('');
 }
 window.onHoldChanged = (t, held) => { ROWS.forEach(r => { if (r.t === t) r.h = held; }); };
-render(1);
+render(loadFilters());
 {% if running %}pollScan();{% endif %}
 </script>
 {% endblock %}

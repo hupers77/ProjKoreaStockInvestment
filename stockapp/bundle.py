@@ -18,7 +18,7 @@ class Bundle:
     # name, market, sector, mcap, shares, per, pbr, eps, bps, div, dps,
     # f_net5, f_net20, i_net20, i_net60, pension_net20 (원),
     # foreign_now, foreign_3m, foreign_6m (지분율 %),
-    # short_ratio (%), short_bal, short_bal_20 (주), shares_5y
+    # shares_5y
     info: pd.DataFrame
     index_close: dict = field(default_factory=dict)      # {"KOSPI": Series, "KOSDAQ": Series}
     market_foreign20: dict = field(default_factory=dict)  # {"KOSPI": 원}
