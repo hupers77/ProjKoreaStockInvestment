@@ -74,6 +74,16 @@ def init():
             c.execute("ALTER TABLE scans ADD COLUMN kind TEXT DEFAULT 'live'")
         if "req_date" not in cols:  # 투자검증에서 사용자가 고른 기준일 (실제 기준일은 그 이전 마지막 거래일)
             c.execute("ALTER TABLE scans ADD COLUMN req_date TEXT")
+        if "code" not in cols:  # 사람이 보는 스캔 번호 'yymmdd-001' (날짜별 일련번호, 중복 없음)
+            c.execute("ALTER TABLE scans ADD COLUMN code TEXT")
+        seq = {}
+        for r in c.execute("SELECT id, started_at FROM scans WHERE code IS NULL ORDER BY id").fetchall():
+            day = (r[1] or "")[2:10].replace("-", "") or "000000"
+            if day not in seq:
+                seq[day] = c.execute("SELECT COUNT(*) FROM scans WHERE code LIKE ?", (day + "-%",)).fetchone()[0]
+            seq[day] += 1
+            c.execute("UPDATE scans SET code=? WHERE id=?", (f"{day}-{seq[day]:03d}", r[0]))
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_scans_code ON scans(code)")
         for k, v in DEFAULTS.items():
             c.execute("INSERT OR IGNORE INTO settings(key, value) VALUES(?, ?)", (k, v))
     repair_numeric_blobs()
@@ -218,9 +228,13 @@ def set_manual(ticker, item, score, value="", note=""):
 
 # ── 스캔 ──
 def scan_start(profile, trigger, demo=False, kind="live", req_date=None):
+    t = now()
+    day = t[2:10].replace("-", "")
     with conn() as c:
-        cur = c.execute("INSERT INTO scans(started_at, profile, status, message, demo, trigger, kind, req_date) "
-                        "VALUES(?,?,?,?,?,?,?,?)", (now(), profile, "running", "시작", int(demo), trigger, kind, req_date))
+        n = c.execute("SELECT COUNT(*) FROM scans WHERE code LIKE ?", (day + "-%",)).fetchone()[0]
+        cur = c.execute("INSERT INTO scans(started_at, profile, status, message, demo, trigger, kind, req_date, code) "
+                        "VALUES(?,?,?,?,?,?,?,?,?)",
+                        (t, profile, "running", "시작", int(demo), trigger, kind, req_date, f"{day}-{n + 1:03d}"))
         return cur.lastrowid
 
 
@@ -232,9 +246,31 @@ def scan_update(scan_id, **kw):
         c.execute(f"UPDATE scans SET {cols} WHERE id=?", (*kw.values(), scan_id))
 
 
-def scans(limit=50):
+def scans(limit=50, offset=0):
     with conn() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM scans WHERE COALESCE(kind,'live')!='btd' ORDER BY id DESC LIMIT ?", (limit,))]
+        return [dict(r) for r in c.execute("SELECT * FROM scans WHERE COALESCE(kind,'live')!='btd' "
+                                           "ORDER BY id DESC LIMIT ? OFFSET ?", (limit, offset))]
+
+
+def scans_count():
+    with conn() as c:
+        return c.execute("SELECT COUNT(*) FROM scans WHERE COALESCE(kind,'live')!='btd'").fetchone()[0]
+
+
+def delete_old_scans(days=365):
+    """시작한 지 days일이 지난 스캔 기록과 그 점수를 지운다 (진행 중인 스캔 제외). 지운 기록 수를 돌려준다."""
+    from datetime import timedelta
+    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    with conn() as c:
+        ids = [r[0] for r in c.execute("SELECT id FROM scans WHERE started_at < ? AND status != 'running'", (cutoff,))]
+        shown = c.execute("SELECT COUNT(*) FROM scans WHERE started_at < ? AND status != 'running' "
+                          "AND COALESCE(kind,'live')!='btd'", (cutoff,)).fetchone()[0]
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            q = ",".join("?" * len(chunk))
+            c.execute(f"DELETE FROM scores WHERE scan_id IN ({q})", chunk)
+            c.execute(f"DELETE FROM scans WHERE id IN ({q})", chunk)
+    return shown
 
 
 def scan(scan_id):

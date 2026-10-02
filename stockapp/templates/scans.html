@@ -13,15 +13,32 @@
   </div>
 </div>
 <div class="card"><div class="tablewrap"><table>
-  <tr><th>#</th><th class="l">시작</th><th class="l">종료</th><th class="l">기준일</th><th class="l">프로파일</th><th class="l">실행</th><th class="l">상태</th><th>종목수</th><th class="l">메시지·경고</th></tr>
+  <tr><th>#</th><th class="l">스캔 번호</th><th class="l">시작</th><th class="l">종료</th><th class="l">기준일</th><th class="l">프로파일</th><th class="l">실행</th><th class="l">상태</th><th>종목수</th><th class="l">메시지·경고</th></tr>
   {% for s in rows %}
-  <tr><td>{{ s.id }}</td><td class="l small">{{ s.started_at }}</td><td class="l small">{{ s.finished_at or '' }}</td>
+  <tr><td>{{ s.no }}</td><td class="l small">{{ s.code or s.id }}</td><td class="l small">{{ s.started_at }}</td><td class="l small">{{ s.finished_at or '' }}</td>
     <td class="l">{{ s.base_date|d8 }}{% if s.demo %} <span class="badge g-B">데모</span>{% endif %}</td><td class="l">{{ s.profile }}</td>
     <td class="l small">{{ {'schedule':'자동','recalc':'재계산','bt-fetch':'검증 스캔','bt-calc':'검증 계산'}.get(s.trigger, '수동') }}</td>
     <td class="l"><span class="{{ 'alert' if s.status=='failed' }}">{{ {'done':'완료','failed':'실패','running':'진행 중'}.get(s.status, s.status) }}</span></td>
     <td>{{ s.n_scored|num if s.n_scored else '' }}</td>
     <td class="basis">{{ s.message }}{% for w in s.warn_list %}<div class="muted">· {{ w }}</div>{% endfor %}</td></tr>
-  {% else %}<tr><td colspan="9" class="l muted">스캔 기록이 없습니다.</td></tr>{% endfor %}
-</table></div></div>
+  {% else %}<tr><td colspan="10" class="l muted">스캔 기록이 없습니다.</td></tr>{% endfor %}
+</table></div>
+  <div style="display:flex;align-items:center;margin-top:8px">
+    <button class="btn" onclick="purgeScans()" title="1년전 스캔 기록 삭제" {{ 'disabled' if running }}>기록 삭제</button>
+    <div class="pager" style="margin:0 0 0 auto">
+      <span class="muted small">총 {{ total }}건</span>
+      <a class="btn" href="{{ url_for('scans', page=page-1) if page > 1 else '#' }}" {{ 'style=pointer-events:none;opacity:.5' if page <= 1 }}>이전</a>
+      <span>{{ page }} / {{ pages }}</span>
+      <a class="btn" href="{{ url_for('scans', page=page+1) if page < pages else '#' }}" {{ 'style=pointer-events:none;opacity:.5' if page >= pages }}>다음</a>
+    </div>
+  </div>
+</div>
 {% endblock %}
-{% block scripts %}<script>{% if running %}pollScan();{% endif %}</script>{% endblock %}
+{% block scripts %}<script>
+async function purgeScans() {
+  if (!confirm('시작한 지 1년이 지난 스캔 기록과 그 점수를 지웁니다. 되돌릴 수 없습니다. 계속할까요?')) return;
+  const j = await postJSON('/api/scans/purge', {});
+  alert(j.message);
+  if (j.ok) location.reload();
+}
+{% if running %}pollScan();{% endif %}</script>{% endblock %}

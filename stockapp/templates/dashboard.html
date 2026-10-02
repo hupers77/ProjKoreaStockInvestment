@@ -10,7 +10,7 @@
       {% else %}
         <b>아직 스캔 결과가 없습니다.</b> <span class="muted">설정에서 KRX 계정을 입력한 뒤 ‘지금 스캔’을 누르세요. 화면만 먼저 보려면 스캔 기록 메뉴의 ‘데모 스캔’을 쓰세요.</span>
       {% endif %}
-      <div class="small muted" id="scan-status">{% if last and last.status != 'done' %}#{{ last.id }} {{ last.status }} · {{ last.message }}{% endif %}</div>
+      <div class="small muted" id="scan-status">{% if last and last.status != 'done' %}{{ last.code or last.id }} {{ last.status }} · {{ last.message }}{% endif %}</div>
     </div>
     <button class="btn green" onclick="recalc()" {{ 'disabled' if running }} title="데이터 조회 없이 현재 설정·평가 기준으로 다시 채점">재계산</button>
     <button class="btn primary" onclick="startScan(false)" {{ 'disabled' if running }}>지금 스캔</button>

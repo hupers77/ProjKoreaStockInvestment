@@ -258,13 +258,28 @@ def manage():
 
 @app.route("/scans")
 def scans():
-    rows = db.scans(60)
+    per = 20
+    total = db.scans_count()
+    pages = max(1, (total + per - 1) // per)
+    page = min(max(1, request.args.get("page", 1, type=int)), pages)
+    rows = db.scans(per, (page - 1) * per)
+    for i, r in enumerate(rows):
+        r["no"] = total - (page - 1) * per - i  # 화면 번호 = 오래된 것부터 센 순번
     for r in rows:
         r["warn_list"] = json.loads(r["warnings"] or "[]")
     last = db.latest_scan()
     changed_at = db.raw_setting("scoring_changed_at")
     changed = bool(changed_at and last and changed_at > (last.get("finished_at") or ""))
-    return render_template("scans.html", rows=rows, saved=scanner.saved_bundle_info(), changed=changed)
+    return render_template("scans.html", rows=rows, saved=scanner.saved_bundle_info(), changed=changed,
+                           page=page, pages=pages, total=total)
+
+
+@app.post("/api/scans/purge")
+def api_scans_purge():
+    if scanner.is_running():
+        return jsonify(ok=False, message="스캔이 진행 중입니다. 끝난 뒤에 지우세요.")
+    n = db.delete_old_scans(365)
+    return jsonify(ok=True, message=f"1년 지난 스캔 기록 {n}건을 지웠습니다." if n else "1년 지난 스캔 기록이 없습니다.")
 
 
 @app.route("/criteria", methods=["GET", "POST"])
@@ -424,7 +439,7 @@ def api_export():
 @app.get("/api/scan/status")
 def api_scan_status():
     s = db.latest_scan(done_only=False, kind=None)
-    return jsonify(running=scanner.is_running(), scan=s and {k: s[k] for k in ("id", "status", "message", "base_date", "started_at")})
+    return jsonify(running=scanner.is_running(), scan=s and {k: s[k] for k in ("id", "code", "status", "message", "base_date", "started_at")})
 
 
 def create_app():

@@ -64,7 +64,7 @@ async function recalc() {  // 데이터 조회 없이 현재 설정·가중치�
 async function pollScan() {
   const el = document.getElementById('scan-status');
   const r = await (await fetch('/api/scan/status')).json();
-  if (el && r.scan) el.textContent = (r.running ? '⏳ ' : '') + '#' + r.scan.id + ' ' + r.scan.status + ' · ' + r.scan.message;
+  if (el && r.scan) el.textContent = (r.running ? '⏳ ' : '') + (r.scan.code || r.scan.id) + ' ' + r.scan.status + ' · ' + r.scan.message;
   if (r.running) setTimeout(pollScan, 2000); else if (el && el.dataset.wasRunning) location.reload();
   if (el && r.running) el.dataset.wasRunning = 1;
 }
