@@ -324,11 +324,15 @@ def score_detail(scan_id, ticker):
 
 
 def score_history(ticker, limit=60):
+    """일자별 점수 추이. 같은 날 여러 번 스캔했으면 그날의 마지막 스캔값만 쓴다."""
     with conn() as c:
         return [_fix_row(dict(r)) for r in c.execute(
             """SELECT s.base_date, s.id, sc.final, sc.grade, sc.s_short, sc.s_mid, sc.s_long, sc.close
                FROM scores sc JOIN scans s ON s.id=sc.scan_id
-               WHERE sc.ticker=? AND s.status='done' ORDER BY s.id DESC LIMIT ?""", (ticker, limit))][::-1]
+               WHERE sc.ticker=? AND s.id IN (
+                   SELECT MAX(s2.id) FROM scores sc2 JOIN scans s2 ON s2.id=sc2.scan_id
+                   WHERE sc2.ticker=? AND s2.status='done' GROUP BY s2.base_date)
+               ORDER BY s.base_date DESC LIMIT ?""", (ticker, ticker, limit))][::-1]
 
 
 def prune_details(keep):
