@@ -50,7 +50,8 @@ def run_scan(trigger="manual", demo=False):
             return scan_id
         except Exception as e:
             traceback.print_exc()
-            db.scan_update(scan_id, status="failed", finished_at=db.now(), message=str(e)[:1000])
+            msg = str(e) if isinstance(e, RuntimeError) else f"{type(e).__name__}: {e}"
+            db.scan_update(scan_id, status="failed", finished_at=db.now(), message=msg[:1000])
             return scan_id
     finally:
         _running.release()

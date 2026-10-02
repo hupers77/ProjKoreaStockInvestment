@@ -55,25 +55,85 @@ def _frame_to_dict(df, cols):
     return {c: df[c].astype(float).to_dict() for c in cols if c in df.columns}
 
 
-def trading_dates(stock, base):
-    start = (datetime.strptime(base, "%Y%m%d") - timedelta(days=365 * 6)).strftime("%Y%m%d")
+def _index_closes_pykrx(stock, start, base):
     out = {}
     for code, mk in (("1001", "KOSPI"), ("2001", "KOSDAQ")):
-        df = _retry(stock.get_index_ohlcv, start, base, code)
+        # name_display=False: 지수 이름 목록 조회를 건너뛴다. 이 목록 조회가 실패하면
+        # pykrx 내부에서 KeyError('지수명')가 나서 스캔 전체가 멈췄다.
+        df = _retry(stock.get_index_ohlcv, start, base, code, name_display=False)
+        if df is None or df.empty or "종가" not in df.columns:
+            raise RuntimeError(f"{mk} 지수 시세가 비어 있음")
         out[mk] = df["종가"].astype(float)
-    dates = [d.strftime("%Y%m%d") for d in out["KOSPI"].index]
-    return dates, out
+    return out
+
+
+def _index_closes_fdr(start, base):
+    import FinanceDataReader as fdr
+    out = {}
+    s, e = f"{start[:4]}-{start[4:6]}-{start[6:]}", f"{base[:4]}-{base[4:6]}-{base[6:]}"
+    for code, mk in (("KS11", "KOSPI"), ("KQ11", "KOSDAQ")):
+        df = fdr.DataReader(code, s, e)
+        if df is None or df.empty:
+            raise RuntimeError(f"{mk} 지수 시세가 비어 있음")
+        out[mk] = df["Close"].astype(float)
+    return out
+
+
+def trading_dates(stock, base, log=print, warnings=None):
+    """거래일 목록과 KOSPI·KOSDAQ 지수 종가. pykrx가 실패하면 FinanceDataReader로 대체한다."""
+    start = (datetime.strptime(base, "%Y%m%d") - timedelta(days=365 * 6)).strftime("%Y%m%d")
+    errors = []
+    for name, fn in (("pykrx", lambda: _index_closes_pykrx(stock, start, base)),
+                     ("FinanceDataReader", lambda: _index_closes_fdr(start, base))):
+        try:
+            out = fn()
+            out = {k: v[v > 0].sort_index() for k, v in out.items()}
+            out = {k: v[~v.index.duplicated()] for k, v in out.items()}
+            if errors and warnings is not None:
+                warnings.append(f"KRX 지수 조회 실패로 {name} 지수 사용: {errors[0]}")
+            dates = [d.strftime("%Y%m%d") for d in out["KOSPI"].index]
+            lag = (datetime.strptime(base, "%Y%m%d") - datetime.strptime(dates[-1], "%Y%m%d")).days
+            if lag > 6 and warnings is not None:
+                warnings.append(f"{name} 지수 데이터가 {dates[-1]}까지만 있어 기준일이 {lag}일 늦습니다.")
+            return dates, out
+        except Exception as e:
+            errors.append(f"{name}: {type(e).__name__} {e}")
+            log(f"지수 조회 실패({name}), 다른 경로 시도…")
+    raise RuntimeError("지수 시세를 가져오지 못했습니다 — " + " / ".join(errors))
+
+
+def krx_check(stock, st):
+    """로그인 상태와 실제 데이터 응답을 확인해 원인을 알려 주는 메시지를 만든다."""
+    msgs = []
+    if st.get("krx_id") and st.get("krx_pw"):
+        try:
+            from pykrx.website.comm import auth
+            if auth.get_auth_session() is None:
+                msgs.append("KRX 로그인에 실패했습니다. 설정의 아이디/비밀번호를 data.krx.co.kr에서 직접 로그인해 확인하세요.")
+        except Exception as e:
+            msgs.append(f"KRX 로그인 확인 중 오류: {type(e).__name__} {e}")
+    else:
+        msgs.append("설정 화면에 한국거래소(data.krx.co.kr) 무료 회원 아이디/비밀번호를 입력하세요.")
+    return msgs
 
 
 def sync_prices(stock, dates, log):
     with db.conn() as c:
         have = {r[0] for r in c.execute("SELECT date FROM price_days")}
     need = [d for d in dates if d not in have]
+    fails = []
     for i, d in enumerate(need):
         if i % 10 == 0:
             log(f"일별 시세 저장 중 {i + 1}/{len(need)} ({d})")
-        df = _retry(stock.get_market_ohlcv, d, market="ALL")
-        if df is None or df.empty:
+        try:
+            df = _retry(stock.get_market_ohlcv, d, market="ALL")
+            if df is None or df.empty or "종가" not in df.columns:
+                raise RuntimeError("응답이 비어 있음")
+        except Exception as e:
+            fails.append(f"{d}: {type(e).__name__} {e}")
+            # 처음 5일이 연속으로 실패하면 접속 문제로 보고 중단
+            if len(fails) >= 5 and len(fails) == i + 1:
+                raise RuntimeError("; ".join(fails[:2]))
             continue
         rows = [(d, str(tk), float(r["시가"]), float(r["고가"]), float(r["저가"]), float(r["종가"]),
                  float(r["거래량"]), float(r.get("거래대금", 0) or 0)) for tk, r in df.iterrows()]
@@ -103,25 +163,31 @@ def collect(st, log=print, with_dart=True):
     _login(st)
     warnings, sources = [], {}
     today = datetime.now().strftime("%Y%m%d")
-    log("거래일 확인 중 (KRX 지수)…")
-    try:
-        all_dates, index_close = trading_dates(stock, today)
-    except Exception as e:
-        hint = "" if st.get("krx_id") else " 설정 화면에 한국거래소(data.krx.co.kr) 무료 회원 아이디/비밀번호를 입력하세요."
-        raise RuntimeError(f"KRX 데이터 접속 실패: {e}.{hint}")
+    log("KRX 로그인 확인 중…")
+    login_msgs = krx_check(stock, st)
+    log("거래일 확인 중 (지수)…")
+    all_dates, index_close = trading_dates(stock, today, log, warnings)
     base = all_dates[-1]
     n_hist = int(st.get("history_days", 300))
     dates = all_dates[-n_hist:]
-    sync_prices(stock, dates, log)
+    try:
+        sync_prices(stock, dates, log)
+    except Exception as e:
+        raise RuntimeError(f"KRX 일별 시세 조회 실패: {type(e).__name__} {e}. " + " ".join(login_msgs))
     panel = load_panel(dates)
     sources["가격"] = f"KRX 일별 시세, 기준일 {base}"
 
     log("종목 정보·밸류에이션 수집 중…")
     frames = []
     for mk in ("KOSPI", "KOSDAQ"):
-        tks = _retry(stock.get_market_ticker_list, base, market=mk)
-        cap = _retry(stock.get_market_cap, base, market=mk)
-        fun = _retry(stock.get_market_fundamental, base, market=mk)
+        try:
+            cap = _retry(stock.get_market_cap, base, market=mk)
+            fun = _retry(stock.get_market_fundamental, base, market=mk)
+            if cap is None or cap.empty or "시가총액" not in cap.columns:
+                raise RuntimeError("시가총액 응답이 비어 있음")
+        except Exception as e:
+            raise RuntimeError(f"{mk} 시가총액·PER 조회 실패: {type(e).__name__} {e}")
+        tks = list(cap.index)
         try:
             sec = _retry(stock.get_market_sector_classifications, base, mk)
             if "종목코드" in sec.columns:
@@ -136,7 +202,7 @@ def collect(st, log=print, with_dart=True):
         df["mcap"] = cap["시가총액"].reindex(df.index)
         df["shares"] = cap["상장주식수"].reindex(df.index)
         for k, col in (("bps", "BPS"), ("per", "PER"), ("pbr", "PBR"), ("eps", "EPS"), ("div", "DIV"), ("dps", "DPS")):
-            df[k] = fun[col].reindex(df.index) if col in fun else None
+            df[k] = fun[col].reindex(df.index) if fun is not None and col in fun else None
         frames.append(df)
     info = pd.concat(frames)
     for tk in info.index[info["name"].isna()]:
