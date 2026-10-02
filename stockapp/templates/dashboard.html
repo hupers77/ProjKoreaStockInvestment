@@ -30,7 +30,7 @@
 <div class="row">
   {% for mk, e in env.items() %}
   <div class="card">
-    <h2>{{ mk }} 시장 환경 <span class="badge g-{{ 'A' if e.score>=8 else 'B' if e.score>=6 else 'C' }}" style="text-decoration:none">{{ e.score|num }}/10</span></h2>
+    <h2>{{ mk }} 시장 환경 {% set lv = 'good' if e.score>=7.5 else 'fair' if e.score>=5 else 'weak' if e.score>=2.5 else 'bad' %}<span class="env-dot env-{{ lv }}" title="{{ {'good':'양호 (상위 25%)','fair':'보통','weak':'주의','bad':'불리 (하위 25%)'}[lv] }}"></span></h2>
     {% set ed = e.date or scan.base_date %}
     <div class="small">조회일 {{ ed[2:4] }}/{{ ed[4:6] }}/{{ ed[6:8] }} · 지수 {{ e.index|num(2) }} · 20일 {{ e.r20|num(1) }}%</div>
     <ul class="small" style="margin:6px 0 0;padding-left:18px">{% for c in e.conds %}<li>{{ c }}</li>{% endfor %}</ul>

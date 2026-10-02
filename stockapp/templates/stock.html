@@ -5,7 +5,7 @@
   <div class="row" style="align-items:center">
     <div style="flex:1 1 320px">
       <input type="radio" class="hold" data-t="{{ r.ticker }}" data-n="{{ r.name }}" {{ 'checked' if holding }}>
-      <span class="name g-{{ r.grade }}" style="font-size:18px">{{ r.name }}</span>
+      <a href="{{ url_for('dashboard') }}" onclick="return goBack()" title="이전 화면으로 돌아가기" class="name g-{{ r.grade }}" style="font-size:18px;color:inherit;text-decoration:none">{{ r.name }}</a>
       <span class="muted">{{ r.ticker }} · {{ r.market }} · {{ r.sector }}</span>
       {% if excluded %}<span class="badge g-X">제외 목록</span>{% endif %}
       <div class="small muted" style="margin-top:6px">평가 기준일 {{ scan.base_date|d8 }} · {{ prof.name }} · 현재가 {{ r.close|num }}원 ({{ '%+.2f'|format(r.chg) }}%) · 시총 {{ ((r.mcap or 0)/1e8)|num }}억</div>
@@ -79,7 +79,7 @@
     <div>{% for k, v in penalties.items() %}<label style="display:block"><input type="checkbox" class="madj" data-item="{{ k }}" {{ 'checked' if manual.get(k) and manual[k].score }}> {{ k }} {{ v[0] }} ({{ v[1] }})</label>{% endfor %}</div>
     <div>{% for k, v in bonuses.items() %}<label style="display:block"><input type="checkbox" class="madj" data-item="{{ k }}" {{ 'checked' if manual.get(k) and manual[k].score }}> {{ k }} {{ v[0] }} (+{{ v[1] }})</label>{% endfor %}</div>
   </div>
-  <div style="margin-top:12px"><button class="btn primary" onclick="saveManual()">수동 입력 저장</button> <span id="msave" class="small muted"></span></div>
+  <div style="margin-top:12px"><button class="btn primary" onclick="saveManual()">수동 입력 저장</button> <a class="btn" href="{{ url_for('dashboard') }}" onclick="return goBack()">돌아가기</a> <span id="msave" class="small muted"></span></div>
 </div>
 
 <div class="card small muted">
@@ -89,6 +89,10 @@
 {% endblock %}
 {% block scripts %}
 <script>
+function goBack() {
+  if (history.length > 1 && document.referrer && new URL(document.referrer).origin === location.origin) { history.back(); return false; }
+  return true;  // 이전 화면이 없으면 링크대로 대시보드로 이동
+}
 const PX = {{ px_json|safe }}, HIST = {{ hist_json|safe }};
 const TARGET = {{ r.target or 'null' }}, STOP = {{ r.stop or 'null' }};
 function ma(arr, n) { return arr.map((_, i) => i < n - 1 ? null : arr.slice(i - n + 1, i + 1).reduce((a, b) => a + b, 0) / n); }
