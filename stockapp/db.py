@@ -234,7 +234,7 @@ def scan_update(scan_id, **kw):
 
 def scans(limit=50):
     with conn() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM scans ORDER BY id DESC LIMIT ?", (limit,))]
+        return [dict(r) for r in c.execute("SELECT * FROM scans WHERE COALESCE(kind,'live')!='btd' ORDER BY id DESC LIMIT ?", (limit,))]
 
 
 def scan(scan_id):
@@ -250,6 +250,8 @@ def latest_scan(done_only=True, kind="live"):
         where.append("status='done'")
     if kind:
         where.append(f"COALESCE(kind,'live')='{kind}'")
+    else:
+        where.append("COALESCE(kind,'live')!='btd'")
     q = "SELECT * FROM scans" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY id DESC LIMIT 1"
     with conn() as c:
         r = c.execute(q).fetchone()
@@ -329,7 +331,8 @@ def repair_numeric_blobs():
             c.executemany(f"UPDATE scores SET {col}=? WHERE rowid=?", [(_from_blob(r[1]), r[0]) for r in rows])
 
 
-def save_scores(scan_id, results):
+def save_scores(scan_id, results, with_detail=True):
+    """with_detail=False면 항목별 상세 없이 점수만 저장한다 (투자검증의 이후 날짜 점수 추이용)."""
     rows = []
     for r in results:
         detail = {
@@ -343,7 +346,7 @@ def save_scores(scan_id, results):
                      n(r["mcap"]), n(r["persp"]["단기"]), n(r["persp"]["중기"]), n(r["persp"]["장기"]), n(r["base"]),
                      n(r["bonus"]), n(r["penalty"]), n(r["final"]), r["grade"], n(r["coverage"]), n(r["core_avg"]),
                      " / ".join(r["knockout"]), " / ".join(r["gate"]), n(r["target"]), n(r["stop"]),
-                     zlib.compress(json.dumps(detail, ensure_ascii=False, default=float).encode())))
+                     zlib.compress(json.dumps(detail, ensure_ascii=False, default=float).encode()) if with_detail else None))
     with conn() as c:
         c.executemany(f"INSERT OR REPLACE INTO scores VALUES({','.join('?' * 23)})", rows)
 
@@ -364,19 +367,27 @@ def score_detail(scan_id, ticker):
     return d
 
 
-def score_history(ticker, limit=60, upto=None):
-    """일자별 점수 추이. 같은 날 여러 번 스캔했으면 그날의 마지막 스캔값만 쓴다.
-    upto(투자검증 기준일)가 있으면 그날까지의 정기·검증 스캔을 모두 쓰고, 없으면 정기 스캔만 쓴다."""
-    cond = "s2.base_date <= ?" if upto else "COALESCE(s2.kind,'live')='live'"
-    params = (ticker, ticker) + ((upto,) if upto else ()) + (limit,)
+def score_history(ticker, since=None, limit=400):
+    """일자별 점수 추이 (정기·투자검증 스캔 모두). 같은 날 여러 번 계산했으면 그날의 마지막 값만 쓴다.
+    since(YYYYMMDD) 이후만 돌려준다."""
     with conn() as c:
         return [_fix_row(dict(r)) for r in c.execute(
-            f"""SELECT s.base_date, s.id, sc.final, sc.grade, sc.s_short, sc.s_mid, sc.s_long, sc.close
+            """SELECT s.base_date, s.id, sc.final, sc.grade, sc.s_short, sc.s_mid, sc.s_long, sc.close
                FROM scores sc JOIN scans s ON s.id=sc.scan_id
                WHERE sc.ticker=? AND s.id IN (
                    SELECT MAX(s2.id) FROM scores sc2 JOIN scans s2 ON s2.id=sc2.scan_id
-                   WHERE sc2.ticker=? AND s2.status='done' AND {cond} GROUP BY s2.base_date)
-               ORDER BY s.base_date DESC LIMIT ?""", params)][::-1]
+                   WHERE sc2.ticker=? AND s2.status='done' AND s2.base_date >= ? GROUP BY s2.base_date)
+               ORDER BY s.base_date DESC LIMIT ?""", (ticker, ticker, since or "", limit))][::-1]
+
+
+def delete_bt_days(base_date):
+    """투자검증 기준일의 이후 날짜 점수(kind='btd')를 지운다 (다시 계산하기 전)."""
+    with conn() as c:
+        ids = [r[0] for r in c.execute("SELECT id FROM scans WHERE kind='btd' AND req_date=?", (base_date,))]
+        if ids:
+            q = ",".join("?" * len(ids))
+            c.execute(f"DELETE FROM scores WHERE scan_id IN ({q})", ids)
+            c.execute(f"DELETE FROM scans WHERE id IN ({q})", ids)
 
 
 def ticker_scans(ticker):

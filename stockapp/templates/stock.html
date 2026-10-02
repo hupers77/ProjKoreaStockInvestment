@@ -67,9 +67,9 @@
 </div>
 
 <div class="row">
-  <div class="card" style="flex:2 1 500px"><h2>주가 (이동평균 20·60·120){% if bt %} <span class="muted small">· 기준일까지, 이후 실제 흐름은 회색 점선</span>{% endif %}</h2>
+  <div class="card" style="flex:2 1 500px"><h2>주가 (이동평균 20·60·120){% if bt %} <span class="muted small">· 세로 점선 = 기준일, 이후는 오늘까지 실제 흐름</span>{% endif %}</h2>
     {% if px_json == "[]" %}<p class="muted small">저장된 시세가 없습니다.</p>{% else %}<canvas id="px" height="110"></canvas>{% endif %}</div>
-  <div class="card" style="flex:1 1 300px"><h2>점수 추이{% if bt %} <span class="muted small">· 기준일까지</span>{% endif %}</h2><canvas id="hist" height="160"></canvas></div>
+  <div class="card" style="flex:1 1 300px"><h2>점수 추이 <span class="muted small">· 기준일 1년 전부터{% if bt %}, 세로 점선 = 기준일{% endif %}</span></h2><canvas id="hist" height="160"></canvas></div>
 </div>
 
 <div class="card">
@@ -122,27 +122,39 @@ function goBack() {
 }
 const PX = {{ px_json|safe }}, HIST = {{ hist_json|safe }}, AFTER = {{ after_json|safe }};
 const TARGET = {{ 'null' if bt else (r.target or 'null') }}, STOP = {{ 'null' if bt else (r.stop or 'null') }};
+const BASE = '{{ scan.base_date }}', IS_BT = {{ 'true' if bt else 'false' }};
+// 기준일 위치에 세로 점선을 긋는 Chart.js 플러그인 (투자검증일 때만)
+function baseLine(i) {
+  return {id: 'baseLine', afterDatasetsDraw(ch) {
+    if (!IS_BT || i < 0) return;
+    const x = ch.scales.x.getPixelForValue(i), a = ch.chartArea, g = ch.ctx;
+    g.save(); g.strokeStyle = '#d43c3c'; g.setLineDash([5, 4]); g.lineWidth = 1.2;
+    g.beginPath(); g.moveTo(x, a.top); g.lineTo(x, a.bottom); g.stroke();
+    g.setLineDash([]); g.fillStyle = '#d43c3c'; g.font = '11px sans-serif'; g.fillText('기준일', Math.min(x + 4, a.right - 36), a.top + 12);
+    g.restore();
+  }};
+}
 function ma(arr, n) { return arr.map((_, i) => i < n - 1 ? null : arr.slice(i - n + 1, i + 1).reduce((a, b) => a + b, 0) / n); }
 if (PX.length && window.Chart) {
-  const c = PX.map(x => x.close), lab = PX.map(x => x.date.slice(2)).concat(AFTER.map(x => x.date.slice(2)));
-  const pad = a => a.concat(AFTER.map(() => null));
-  const ds = [{label: '종가', data: pad(c), borderColor: '#1d232b', borderWidth: 1.5, pointRadius: 0},
-    {label: '20일', data: pad(ma(c, 20)), borderColor: '#e07b00', borderWidth: 1, pointRadius: 0},
-    {label: '60일', data: pad(ma(c, 60)), borderColor: '#2457c5', borderWidth: 1, pointRadius: 0},
-    {label: '120일', data: pad(ma(c, 120)), borderColor: '#7a3ec8', borderWidth: 1, pointRadius: 0}];
-  if (AFTER.length) ds.push({label: '기준일 이후', data: c.map((v, i) => i === c.length - 1 ? v : null).concat(AFTER.map(x => x.close)),
-    borderColor: '#9aa3ad', borderDash: [4, 3], borderWidth: 1.5, pointRadius: 0});
+  const all = PX.concat(AFTER);  // 기준일 이후도 같은 선으로 이어 그린다
+  const c = all.map(x => x.close), lab = all.map(x => x.date.slice(2));
+  const ds = [{label: '종가', data: c, borderColor: '#1d232b', borderWidth: 1.5, pointRadius: 0},
+    {label: '20일', data: ma(c, 20), borderColor: '#e07b00', borderWidth: 1, pointRadius: 0},
+    {label: '60일', data: ma(c, 60), borderColor: '#2457c5', borderWidth: 1, pointRadius: 0},
+    {label: '120일', data: ma(c, 120), borderColor: '#7a3ec8', borderWidth: 1, pointRadius: 0}];
   if (TARGET) ds.push({label: '목표가', data: c.map(() => TARGET), borderColor: '#d43c3c', borderDash: [5, 4], borderWidth: 1, pointRadius: 0});
   if (STOP) ds.push({label: '손절가', data: c.map(() => STOP), borderColor: '#2a62d6', borderDash: [5, 4], borderWidth: 1, pointRadius: 0});
-  new Chart(document.getElementById('px'), {type: 'line', data: {labels: lab, datasets: ds},
+  new Chart(document.getElementById('px'), {type: 'line', data: {labels: lab, datasets: ds}, plugins: [baseLine(PX.length - 1)],
     options: {animation: false, interaction: {mode: 'index', intersect: false}, plugins: {legend: {labels: {boxWidth: 12}}}, scales: {x: {ticks: {maxTicksLimit: 10}}}}});
 }
-if (window.Chart) new Chart(document.getElementById('hist'), {type: 'line', data: {labels: HIST.map(h => (h.base_date || '').slice(4)),
+if (window.Chart) new Chart(document.getElementById('hist'), {type: 'line', plugins: [baseLine(HIST.findIndex(h => h.base_date >= BASE))],
+  data: {labels: HIST.map(h => (h.base_date || '').slice(2)),
   datasets: [{label: '최종', data: HIST.map(h => h.final), borderColor: '#0f7b4b', pointRadius: 2},
     {label: '단기', data: HIST.map(h => h.s_short), borderColor: '#e07b00', borderWidth: 1, pointRadius: 0},
     {label: '중기', data: HIST.map(h => h.s_mid), borderColor: '#2457c5', borderWidth: 1, pointRadius: 0},
     {label: '장기', data: HIST.map(h => h.s_long), borderColor: '#7a3ec8', borderWidth: 1, pointRadius: 0}]},
-  options: {animation: false, scales: {y: {min: 0, max: 100}}, plugins: {legend: {labels: {boxWidth: 12}}}}});
+  options: {animation: false, interaction: {mode: 'index', intersect: false}, scales: {y: {min: 0, max: 100}, x: {ticks: {maxTicksLimit: 8}}},
+    plugins: {legend: {labels: {boxWidth: 12}}}}});
 async function saveManual() {
   const items = [];
   document.querySelectorAll('input.mscore').forEach(el => {

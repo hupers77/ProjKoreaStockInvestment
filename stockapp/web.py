@@ -1,6 +1,6 @@
 """웹 서버 (Flask) + 매일 자동 스캔 스케줄러."""
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from urllib.parse import quote
@@ -126,7 +126,8 @@ def stock(ticker):
         abort(404)
     base = scan["base_date"]
     meta = json.loads(scan["env"] or "{}")
-    hist = db.score_history(ticker, upto=base) if bt else db.score_history(ticker)
+    since = (datetime.strptime(base, "%Y%m%d") - timedelta(days=365)).strftime("%Y%m%d")
+    hist = db.score_history(ticker, since=since)  # 기준일 1년 전부터 오늘까지 있는 점수 모두
     manual = db.manual_scores().get(ticker, {})
     holding = next((h for h in db.holdings() if h["ticker"] == ticker), None)
     excluded = any(e["ticker"] == ticker for e in db.exclusions())

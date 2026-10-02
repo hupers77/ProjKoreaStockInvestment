@@ -172,9 +172,10 @@ def run_backtest(req_date, mode="fetch"):
             results, u = score_universe(b, sst, hold, excl, db.manual_scores(),
                                         progress=lambda i, n: log(f"점수 산정 중 {i}/{n}"))
             db.save_scores(scan_id, results)
+            n_days = _score_after_days(b, sst, hold, excl, log)
             env = {mk: {k: v for k, v in e.items() if k != "conds"} | {"conds": e["conds"]} for mk, e in u["env"].items()}
             db.scan_update(scan_id, status="done", finished_at=db.now(), n_scored=len(results),
-                           message="완료 (검증 계산)" if mode == "calc" else "완료",
+                           message=("완료 (검증 계산" if mode == "calc" else "완료 (") + f"이후 {n_days}개 날짜 점수 포함)",
                            env=json.dumps({"env": env, "sources": b.sources}, ensure_ascii=False, default=float),
                            warnings=json.dumps(b.warnings, ensure_ascii=False))
             return scan_id
@@ -185,6 +186,76 @@ def run_backtest(req_date, mode="fetch"):
             return scan_id
     finally:
         _running.release()
+
+
+AFTER_DAILY_MAX = 20  # 기준일 이후 거래일이 이보다 많으면 5거래일(주 1회) 간격으로 계산 (전 종목 1회 채점이 수십 초)
+
+
+def _after_bundles(b):
+    """기준일 이후 날짜별 채점용 데이터 묶음을 만든다 (데이터를 새로 받지 않음).
+    주가·거래량·지수는 그날까지의 실제 값, 시가총액·PER·PBR·배당수익률은 주가 비율로 조정,
+    수급·외국인 지분율·재무·환율은 기준일 값을 그대로 쓴다."""
+    import pandas as pd
+    from .bundle import Bundle
+    n_hist = len(b.close)
+    if b.demo:
+        from .demo import _paths, make_bundle
+        _, _, _, close, high, low, opn, volume, value, _ = _paths(len(b.info), 7)
+        panels = {"close": close, "high": high, "low": low, "open": opn, "volume": volume, "value": value}
+        idx_full = make_bundle(n=len(b.info)).index_close
+    else:
+        from .collector import load_panel
+        with db.conn() as c:
+            days = [r[0] for r in c.execute("SELECT date FROM price_days ORDER BY date")]
+        before = [d for d in days if d <= b.base_date]
+        after = [d for d in days if d > b.base_date]
+        if not after:
+            return []
+        panels = load_panel(before[-n_hist:] + after)
+        idx_full = {}
+        for mk in ("KOSPI", "KOSDAQ"):
+            ser = db.index_series(mk)
+            if ser:
+                idx_full[mk] = pd.Series(ser).set_axis(pd.to_datetime(list(ser.keys())))
+    base_ts = pd.Timestamp(b.base_date)
+    after = [d for d in panels["close"].index if d > base_ts]
+    if len(after) > AFTER_DAILY_MAX:
+        after = after[::-1][::5][::-1]  # 오늘(마지막 거래일)부터 5거래일 간격
+    tks = [t for t in b.info.index if t in panels["close"].columns]
+    c0 = b.close.iloc[-1].reindex(tks)
+    for d in after:
+        win = {k: v.loc[:d, tks].iloc[-n_hist:] for k, v in panels.items()}
+        cd = win["close"].ffill().iloc[-1]
+        ratio = (cd / c0).where(lambda x: x > 0)
+        info = b.info.loc[tks].copy()
+        if "shares" in info:
+            info["mcap"] = info["shares"] * cd
+        for col in ("per", "pbr"):
+            if col in info:
+                info[col] = info[col] * ratio
+        if "div" in info:
+            info["div"] = info["div"] / ratio
+        yield Bundle(base_date=d.strftime("%Y%m%d"), close=win["close"], open=win["open"], high=win["high"],
+                     low=win["low"], volume=win["volume"], value=win["value"], info=info,
+                     index_close={k: v[v.index <= d].iloc[-n_hist:] for k, v in idx_full.items()},
+                     market_foreign20=b.market_foreign20, fx=b.fx, dps_hist=b.dps_hist, pbr_hist=b.pbr_hist,
+                     fin=b.fin, admin=set(), sources=b.sources, warnings=[], demo=b.demo), len(after)
+
+
+def _score_after_days(b, sst, hold, excl, log):
+    """기준일 다음 날부터 오늘까지 날짜별 점수를 만들어 점수 추이에 쓴다."""
+    db.delete_bt_days(b.base_date)
+    n = 0
+    manual = db.manual_scores()
+    for bd, total in _after_bundles(b):
+        n += 1
+        log(f"기준일 이후 점수 생성 중 {n}/{total} ({bd.base_date})")
+        results, _ = score_universe(bd, sst, hold, excl, manual)
+        sid = db.scan_start(sst["profile"], "bt-day", b.demo, kind="btd", req_date=b.base_date)
+        db.save_scores(sid, results, with_detail=False)
+        db.scan_update(sid, status="done", finished_at=db.now(), base_date=bd.base_date, n_scored=len(results),
+                       message="투자검증 이후 날짜 점수")
+    return n
 
 
 def run_backtest_async(req_date, mode="fetch"):
