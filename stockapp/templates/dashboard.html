@@ -78,6 +78,10 @@
     <select id="fs" onchange="render(1)"><option value="">전체 업종</option></select>
     <label class="small"><input type="checkbox" id="fh" onchange="render(1)"> 보유만</label>
     <span class="muted small" id="cnt"></span>
+    <span style="margin-left:auto" class="small">내려받기
+      <button class="btn" onclick="exportRows('csv')">CSV</button>
+      <button class="btn" onclick="exportRows('xlsx')">Excel</button>
+      <button class="btn" onclick="exportRows('md')">MD</button></span>
   </div>
   <div class="tablewrap"><table id="tbl">
     <thead><tr>
@@ -151,6 +155,29 @@ function filtered() {
   return ROWS.filter(r => (!q || r.n.toLowerCase().includes(q) || r.t.includes(q)) && (!g || g.includes(r.g))
     && (!m || r.m === m) && (!s || r.sec === s) && (!h || r.h));
 }
+let CURRENT = [];
+// 화면의 검색 조건·정렬 그대로(페이지 구분 없이 전체) 파일로 내려받는다
+async function exportRows(fmt) {
+  if (!CURRENT.length) { alert('내려받을 종목이 없습니다.'); return; }
+  const parts = [];
+  const g = document.getElementById('fg'), m = document.getElementById('fm');
+  if (document.getElementById('q').value) parts.push('검색어 "' + document.getElementById('q').value + '"');
+  if (g.value) parts.push('등급 ' + g.options[g.selectedIndex].text);
+  if (m.value) parts.push('시장 ' + m.value);
+  if (fs.value) parts.push('업종 ' + fs.value);
+  if (document.getElementById('fh').checked) parts.push('보유만');
+  const r = await fetch('/api/export', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({fmt, tickers: CURRENT.map(x => x.t), desc: parts.join(', ')})});
+  if (!r.ok) { alert('내려받기에 실패했습니다.'); return; }
+  const blob = await r.blob();
+  const cd = r.headers.get('Content-Disposition') || '';
+  const m2 = cd.match(/filename\*=UTF-8''([^;]+)/);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = m2 ? decodeURIComponent(m2[1]) : 'ranking.' + fmt;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
 function render(p) {
   let rows = filtered();
   const key = r => sortK === 'g' ? GORD[r.g] : (sortK === 'h' ? (r.h ? 1 : 0) : r[sortK]);
@@ -160,6 +187,7 @@ function render(p) {
     if (typeof x === 'string') return sortDir * x.localeCompare(y);
     return sortDir * (x - y);
   });
+  CURRENT = rows;
   const pages = Math.max(1, Math.ceil(rows.length / PER));
   page = Math.min(Math.max(1, p || 1), pages);
   saveFilters();

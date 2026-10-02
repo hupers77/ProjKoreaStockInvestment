@@ -3,7 +3,9 @@ import json
 from datetime import datetime
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from flask import Flask, abort, jsonify, redirect, render_template, request, url_for
+from urllib.parse import quote
+
+from flask import Flask, Response, abort, jsonify, redirect, render_template, request, url_for
 
 from . import db, scanner
 from .framework import BONUSES, ITEM_MAP, ITEMS, KNOCKOUTS, PENALTIES, PERSPECTIVES, PROFILES
@@ -265,6 +267,35 @@ def api_scan():
     demo = bool((request.get_json(silent=True) or {}).get("demo"))
     started = scanner.run_async("manual", demo)
     return jsonify(ok=started, message="스캔을 시작했습니다." if started else "이미 스캔이 진행 중입니다.")
+
+
+@app.post("/api/export")
+def api_export():
+    """대시보드 순위표에서 현재 검색·정렬된 종목을 파일로 내려준다."""
+    from . import export
+    j = request.get_json(force=True)
+    fmt = j.get("fmt", "csv")
+    scan = db.latest_scan()
+    if not scan or fmt not in ("csv", "xlsx", "md"):
+        abort(400)
+    scores = db.scores(scan["id"])
+    p = db.prev_scan(scan["id"])
+    prev_map = {r["ticker"]: r["final"] for r in db.scores(p["id"])} if p else {}
+    held = {h["ticker"] for h in db.holdings()}
+    rows = export.build_rows(scores, j.get("tickers") or [], prev_map, held)
+    bd = scan["base_date"] or ""
+    name = f"종목순위_{bd}"
+    if fmt == "csv":
+        data, mime = export.to_csv(rows), "text/csv; charset=utf-8"
+    elif fmt == "xlsx":
+        data, mime = export.to_xlsx(rows), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    else:
+        title = f"종목 순위 ({bd[:4]}-{bd[4:6]}-{bd[6:]})"
+        note = f"프로파일 {PROFILES.get(scan['profile'], {}).get('name', scan['profile'])} · 검색 조건: {j.get('desc') or '전체'} · {len(rows)}종목"
+        data, mime = export.to_md(rows, title, note), "text/markdown; charset=utf-8"
+    fn = f"{name}.{fmt}"
+    return Response(data, mimetype=mime, headers={
+        "Content-Disposition": f"attachment; filename=ranking_{bd}.{fmt}; filename*=UTF-8''{quote(fn)}"})
 
 
 @app.get("/api/scan/status")
