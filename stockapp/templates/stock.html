@@ -58,13 +58,13 @@
   <h3 style="font-size:14px;margin:16px 0 6px">{{ p }} 평가 <span class="muted small">· {{ d.persp[p]|num(1) }}점</span></h3>
   <div class="tablewrap"><table>
     <tr><th class="l">ID</th><th class="l">평가 항목</th><th>가중치</th><th>점수</th><th>가중점수</th><th class="l">데이터값</th><th class="l">평가 근거</th><th class="l">수동(0~10)</th><th class="l">메모</th></tr>
-    {% for it in items %}{% set v = d['items'][it.id] %}{% set m = manual.get(it.id) %}
+    {% for it in items %}{% set v = d['items'][it.id] %}{% set m = manual.get(it.id) %}{% set w = (d.weights or {}).get(it.id, it.weight) %}
     <tr>
       <td class="l">{{ it.id }}{{ ' ★' if it.core }}</td>
       <td class="l">{{ it.name }}</td>
-      <td>{{ it.weight }}</td>
+      <td>{{ w|num }}{% if w != it.weight %} <span class="muted small">(권장 {{ it.weight }})</span>{% endif %}</td>
       <td>{% if v[0] is none %}<span class="na">N/A</span>{% else %}<b>{{ v[0]|num }}</b>{% if v[3] %}<span class="est">추정</span>{% endif %}{% if v[4]=='수동' %}<span class="man">수동</span>{% endif %}{% endif %}</td>
-      <td>{{ (v[0]*it.weight/10)|num(1) if v[0] is not none else '-' }}</td>
+      <td>{{ (v[0]*w/10)|num(1) if v[0] is not none else '-' }}</td>
       <td class="val">{{ v[1] }}</td>
       <td class="basis">{{ v[2] }}</td>
       <td class="l"><input type="number" min="0" max="10" step="1" style="width:64px" data-item="{{ it.id }}" class="mscore" value="{{ m.score|int if m else '' }}"></td>

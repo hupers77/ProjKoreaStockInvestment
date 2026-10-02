@@ -87,11 +87,47 @@ def settings():
     return st
 
 
+CRITERIA_KEYS = ("k7_value_eok", "k8_mcap_eok", "gate_s_cov", "gate_a_cov")
+PROFILE_KEYS = ("A", "B", "C", "D")
+
+
+def profile_criteria(st=None):
+    """프로파일(A~D)별 점수 기준. 저장된 값이 없으면 공통 기본값을 쓴다."""
+    st = st or settings()
+    out = {}
+    for p in PROFILE_KEYS:
+        out[p] = {k: st.get(f"p{p}.{k}", st[k]) for k in CRITERIA_KEYS}
+    return out
+
+
+def profile_weights(p, st=None):
+    """프로파일별 사용자 가중치 {항목ID: 가중치}. 저장 안 된 항목은 권장값."""
+    from .framework import ITEM_MAP
+    st = st or settings()
+    out = {}
+    for iid, meta in ITEM_MAP.items():
+        v = st.get(f"p{p}.w.{iid}")
+        try:
+            out[iid] = float(v) if v not in (None, "") else float(meta["weight"])
+        except ValueError:
+            out[iid] = float(meta["weight"])
+    return out
+
+
 def scoring_settings(st=None):
     st = st or settings()
-    return {"profile": st["profile"], "k7_value_eok": float(st["k7_value_eok"]),
-            "k8_mcap_eok": float(st["k8_mcap_eok"]), "gate_s_cov": float(st["gate_s_cov"]),
-            "gate_a_cov": float(st["gate_a_cov"])}
+    p = st["profile"] if st["profile"] in PROFILE_KEYS else "C"
+    c = profile_criteria(st)[p]
+    return {"profile": p, "k7_value_eok": float(c["k7_value_eok"]), "k8_mcap_eok": float(c["k8_mcap_eok"]),
+            "gate_s_cov": float(c["gate_s_cov"]), "gate_a_cov": float(c["gate_a_cov"]),
+            "weights": profile_weights(p, st)}
+
+
+def save_raw_settings(d):
+    """프로파일별 키(pA.k7_value_eok, pC.w.S01 등)를 저장한다."""
+    with conn() as c:
+        for k, v in d.items():
+            c.execute("INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)", (k, str(v)))
 
 
 def save_settings(d):
@@ -259,6 +295,7 @@ def save_scores(scan_id, results):
             "items": {k: [v.score, v.value, v.basis, v.est, v.src] for k, v in r["items"].items()},
             "persp": r["persp"], "cov": r["cov"], "adj": r["adj"], "gate": r["gate"],
             "knockout": r["knockout"], "reliability": r["reliability"], "grade_label": r["grade_label"],
+            "weights": r.get("weights"),
         }
         n = _num
         rows.append((scan_id, str(r["ticker"]), str(r["name"]), r["market"], r["sector"], n(r["close"]), n(r["chg"]),

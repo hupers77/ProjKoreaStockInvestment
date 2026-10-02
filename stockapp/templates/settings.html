@@ -13,15 +13,18 @@
 <div class="card">
   <h2>점수 기준</h2>
   <div class="kv">
-    <label>투자 성향 프로파일</label>
+    <label>적용 프로파일 (스캔에 사용)</label>
     <select name="profile">{% for k, p in profiles.items() %}<option value="{{ k }}" {{ 'selected' if st.profile==k }}>{{ p.name }} — 단기 {{ (p['단기']*100)|int }}% / 중기 {{ (p['중기']*100)|int }}% / 장기 {{ (p['장기']*100)|int }}%</option>{% endfor %}</select>
-    <label>K7 최소 20일 평균 거래대금(억)</label><input type="number" step="1" name="k7_value_eok" value="{{ st.k7_value_eok }}">
-    <label>K8 최소 시가총액(억)</label><input type="number" step="10" name="k8_mcap_eok" value="{{ st.k8_mcap_eok }}">
-    <label>S등급 최소 커버리지</label><input type="number" step="0.05" min="0" max="1" name="gate_s_cov" value="{{ st.gate_s_cov }}">
-    <label>A등급 최소 커버리지</label><div><input type="number" step="0.05" min="0" max="1" name="gate_a_cov" value="{{ st.gate_a_cov }}">
-      <span class="small muted">기준서 기본값 S 0.80 / A 0.70. 무료 자동 데이터만으로는 커버리지가 이보다 낮아 A·S가 제한될 수 있으니, 핵심 수동 항목을 채우는 것을 권장합니다.</span></div>
   </div>
-  <p class="small muted">변경한 기준은 다음 스캔부터 적용됩니다.</p>
+  <p class="small muted" style="margin:12px 0 6px">아래 기준은 프로파일마다 따로 저장됩니다. 스캔에는 위에서 고른 프로파일의 기준과 가중치(<a href="{{ url_for('criteria') }}">평가 기준</a> 화면)가 쓰입니다.</p>
+  <div class="tablewrap"><table>
+    <tr><th class="l">기준</th><th class="l">기준서 권장값</th>{% for k, p in profiles.items() %}<th class="l">{{ p.name.split(' (')[0] }}{% if st.profile==k %} <span class="badge g-A">적용 중</span>{% endif %}</th>{% endfor %}</tr>
+    {% for key, label, dflt, step in [('k7_value_eok','K7 최소 20일 평균 거래대금(억)','10','1'), ('k8_mcap_eok','K8 최소 시가총액(억)','300','10'), ('gate_s_cov','S등급 최소 커버리지 (0~1)','0.80','0.05'), ('gate_a_cov','A등급 최소 커버리지 (0~1)','0.70','0.05')] %}
+    <tr><td class="l">{{ label }}</td><td class="l muted">{{ dflt }}</td>
+      {% for k in profiles %}<td class="l"><input type="number" step="{{ step }}" min="0" name="p{{k}}.{{key}}" value="{{ '%g'|format(crit[k][key]|float) }}" style="width:100px"></td>{% endfor %}</tr>
+    {% endfor %}
+  </table></div>
+  <p class="small muted">무료 자동 데이터만으로는 커버리지가 0.70보다 낮아 A·S가 제한될 수 있습니다. 변경한 기준은 다음 스캔부터 적용됩니다.</p>
 </div>
 <div class="card">
   <h2>무료 데이터 연결</h2>

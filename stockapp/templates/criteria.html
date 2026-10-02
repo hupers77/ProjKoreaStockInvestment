@@ -1,26 +1,61 @@
 {% extends "base.html" %}
 {% block title %}평가 기준{% endblock %}
 {% block body %}
+{% if saved %}<div class="ok">{{ profiles[p].name }} 가중치를 저장했습니다. 다음 스캔부터 적용됩니다.</div>{% endif %}
 <div class="card">
   <h2>평가 기준 (평가 기준서 v1.0)</h2>
   <p class="small">각 항목 0~10점 × 가중치 → 관점 점수(100점 환산, N/A 항목은 분모에서 제외) → 프로파일 비중으로 합산 → 가점(최대 +5)·감점(최대 −15) → 등급 게이트 적용.
-  ‘자동’은 무료 데이터(KRX·OpenDART)로 매일 계산하는 항목, ‘수동’은 종목 상세 화면에서 직접 입력하는 항목입니다. 추정값으로 계산하는 항목은 기준서 10장에 따라 최대 6점입니다.</p>
+  ‘자동’은 무료 데이터(KRX·OpenDART)로 매일 계산하는 항목, ‘수동’은 종목 상세 화면에서 직접 입력하는 항목입니다. 추정값으로 계산하는 항목은 최대 6점입니다.</p>
   <div class="legend">{% for g in ['S','A','B','C','X'] %}<span class="name g-{{g}}">{{ grade_info[g][0] }} · {{ grade_info[g][1] }} ({{ grade_info[g][2] }})</span>{% endfor %}</div>
 </div>
+<form method="post" action="{{ url_for('criteria', p=p) }}">
+<div class="card">
+  <div class="filters" style="margin:0">
+    <b>가중치 편집 프로파일</b>
+    {% for k, pr in profiles.items() %}<a class="btn {{ 'primary' if k==p }}" href="{{ url_for('criteria', p=k) }}">{{ pr.name.split(' (')[0] }}{% if k==active %} ✓{% endif %}</a>{% endfor %}
+    <span class="small muted">✓ = 설정에서 적용 중인 프로파일</span>
+  </div>
+  <p class="small muted" style="margin-bottom:0">왼쪽 ‘권장’은 기준서의 표준 가중치, 오른쪽 ‘가중치’는 이 프로파일에서 쓸 값입니다. 0으로 두면 그 항목은 점수에서 빠집니다. 관점별 합계가 100이 아니어도 계산은 되지만(적용된 가중치로 환산) 기준서처럼 100으로 맞추는 것을 권장합니다.</p>
+</div>
 <div class="row">
-  {% for p, items in groups.items() %}
-  <div class="card"><h2>{{ p }}</h2><table>
-    <tr><th class="l">ID</th><th class="l">항목</th><th>가중치</th><th class="l">입력</th></tr>
-    {% for it in items %}<tr><td class="l">{{ it.id }}{{ ' ★' if it.core }}</td><td class="l">{{ it.name }}</td><td>{{ it.weight }}</td>
-      <td class="l">{% if it.id in auto %}<span class="badge g-A">자동</span>{% else %}<span class="badge g-C">수동</span>{% endif %}</td></tr>{% endfor %}
-    <tr><td></td><td class="l muted small">자동 가중치 합</td><td><b>{{ items|selectattr('id', 'in', auto)|sum(attribute='weight') }}</b></td><td></td></tr>
+  {% for g, items in groups.items() %}
+  <div class="card"><h2>{{ g }}</h2><table>
+    <tr><th class="l">ID</th><th class="l">항목</th><th>권장</th><th>가중치</th><th class="l">입력</th></tr>
+    {% for it in items %}<tr>
+      <td class="l">{{ it.id }}{{ ' ★' if it.core }}</td><td class="l">{{ it.name }}</td>
+      <td class="muted">{{ it.weight }}</td>
+      <td><input type="number" min="0" max="50" step="1" name="w.{{ it.id }}" data-g="{{ g }}" data-std="{{ it.weight }}" class="wt" value="{{ weights[it.id]|num }}" style="width:62px"></td>
+      <td class="l">{% if it.id in disabled %}<span class="badge g-X" style="text-decoration:none">제외</span>{% elif it.id in auto %}<span class="badge g-A">자동</span>{% else %}<span class="badge g-C">수동</span>{% endif %}</td></tr>{% endfor %}
+    <tr><td></td><td class="l muted small">합계</td><td class="muted">100</td><td><b class="wsum" data-g="{{ g }}"></b></td><td></td></tr>
   </table></div>
   {% endfor %}
 </div>
+<div class="card">
+  <button class="btn primary">{{ profiles[p].name.split(' (')[0] }} 가중치 저장</button>
+  <button class="btn" name="reset" value="1" onclick="return confirm('이 프로파일의 가중치를 모두 권장값으로 되돌릴까요?')">권장값으로 되돌리기</button>
+</div>
+</form>
 <div class="row">
   <div class="card"><h2>사전 제외 필터</h2><ul class="small">{% for k, v in knockouts.items() %}<li>{{ k }} {{ v }}{% if k in ['K1','K3','K7','K8','K9','K10'] %} <span class="badge g-A">자동</span>{% endif %}</li>{% endfor %}</ul></div>
   <div class="card"><h2>가점·감점</h2><ul class="small">
     {% for k, v in penalties.items() %}<li>{{ k }} {{ v[0] }} ({{ v[1] }}){% if k=='D4' %} <span class="badge g-A">가격 기준 자동</span>{% endif %}</li>{% endfor %}
     {% for k, v in bonuses.items() %}<li>{{ k }} {{ v[0] }} (+{{ v[1] }})</li>{% endfor %}</ul></div>
 </div>
+{% endblock %}
+{% block scripts %}
+<script>
+function sums() {
+  document.querySelectorAll('.wsum').forEach(el => {
+    let t = 0;
+    document.querySelectorAll('input.wt[data-g="' + el.dataset.g + '"]').forEach(i => {
+      t += Number(i.value || 0);
+      i.style.background = Number(i.value) !== Number(i.dataset.std) ? 'var(--gB)' : '';
+      i.style.color = Number(i.value) !== Number(i.dataset.std) ? 'var(--gB-t)' : '';
+    });
+    el.textContent = t; el.style.color = t === 100 ? '' : '#b42318';
+  });
+}
+document.querySelectorAll('input.wt').forEach(i => i.addEventListener('input', sums));
+sums();
+</script>
 {% endblock %}

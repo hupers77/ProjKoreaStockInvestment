@@ -914,18 +914,22 @@ def score_ticker(t: Ctx, st, manual):
                 r.score = min(r.score, 6.0)
         items[iid] = r
 
+    W = st.get("weights") or {}
+    wt = lambda iid: float(W.get(iid, ITEM_MAP[iid]["weight"]))  # 프로파일별 사용자 가중치 (없으면 권장값)
     persp, cov = {}, {}
     for p in PERSPECTIVES:
-        num = den = 0
+        num = den = tot = 0
         for iid, meta in ITEM_MAP.items():
             if meta["persp"] != p:
                 continue
+            w = wt(iid)
+            tot += w
             r = items[iid]
-            if r.score is not None:
-                num += r.score * meta["weight"]
-                den += meta["weight"]
+            if r.score is not None and w > 0:
+                num += r.score * w
+                den += w
         persp[p] = num / den * 10 if den else None
-        cov[p] = den / 100
+        cov[p] = den / tot if tot else 0
 
     prof = PROFILES.get(st["profile"], PROFILES["C"])
     wsum = sum(prof[p] for p in PERSPECTIVES if persp[p] is not None)
@@ -948,7 +952,7 @@ def score_ticker(t: Ctx, st, manual):
 
     # 등급 게이트
     ko = knockouts(t, st)
-    core = [items[i] for i, m in ITEM_MAP.items() if m["core"]]
+    core = [items[i] for i, m in ITEM_MAP.items() if m["core"] and wt(i) > 0]
     gate = []
     if final >= 90:
         reasons = []
@@ -979,6 +983,7 @@ def score_ticker(t: Ctx, st, manual):
         "knockout": ko, "coverage": coverage, "reliability": reliability,
         "core_avg": float(np.mean(core_vals)) if core_vals else 0.0,
         "target": t.cache.get("target"), "stop": t.cache.get("stop"),
+        "weights": {i: wt(i) for i in ITEM_MAP},
     }
 
 

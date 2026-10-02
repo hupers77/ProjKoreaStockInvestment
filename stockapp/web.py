@@ -149,20 +149,38 @@ def scans():
     return render_template("scans.html", rows=rows)
 
 
-@app.route("/criteria")
+@app.route("/criteria", methods=["GET", "POST"])
 def criteria():
-    groups = {p: [ITEM_MAP[i[0]] for i in ITEMS if i[1] == p] for p in PERSPECTIVES}
-    from .scoring import RULES
-    return render_template("criteria.html", groups=groups, auto=set(RULES), knockouts=KNOCKOUTS,
-                           penalties=PENALTIES, bonuses=BONUSES)
+    st = db.settings()
+    p = request.values.get("p") or st["profile"]
+    if p not in db.PROFILE_KEYS:
+        p = "C"
+    if request.method == "POST":
+        f = request.form
+        d = {}
+        for iid, meta in ITEM_MAP.items():
+            v = f.get(f"w.{iid}", "").strip()
+            if f.get("reset"):
+                v = meta["weight"]
+            try:
+                d[f"p{p}.w.{iid}"] = max(0.0, min(50.0, float(v)))
+            except ValueError:
+                d[f"p{p}.w.{iid}"] = meta["weight"]
+        db.save_raw_settings(d)
+        return redirect(url_for("criteria", p=p, saved=1))
+    groups = {g: [ITEM_MAP[i[0]] for i in ITEMS if i[1] == g] for g in PERSPECTIVES}
+    from .scoring import DISABLED, RULES
+    auto = set(RULES) - set(DISABLED)
+    return render_template("criteria.html", groups=groups, auto=auto, disabled=DISABLED, knockouts=KNOCKOUTS,
+                           penalties=PENALTIES, bonuses=BONUSES, p=p, active=st["profile"],
+                           weights=db.profile_weights(p, st), saved=request.args.get("saved"))
 
 
 @app.route("/settings", methods=["GET", "POST"])
 def settings():
     if request.method == "POST":
         f = request.form
-        d = {k: f.get(k, "").strip() for k in ("scan_time", "profile", "k7_value_eok", "k8_mcap_eok",
-                                                 "gate_s_cov", "gate_a_cov", "krx_id", "dart_key")}
+        d = {k: f.get(k, "").strip() for k in ("scan_time", "profile", "krx_id", "dart_key")}
         d["scan_enabled"] = "1" if f.get("scan_enabled") else "0"
         if f.get("krx_pw"):
             d["krx_pw"] = f["krx_pw"]
@@ -171,9 +189,19 @@ def settings():
         except ValueError:
             d["scan_time"] = "18:30"
         db.save_settings(d)
+        raw = {}
+        for pk in db.PROFILE_KEYS:
+            for k in db.CRITERIA_KEYS:
+                v = f.get(f"p{pk}.{k}", "").strip()
+                try:
+                    raw[f"p{pk}.{k}"] = float(v)
+                except ValueError:
+                    pass
+        db.save_raw_settings(raw)
         schedule()
         return redirect(url_for("settings", saved=1))
-    return render_template("settings.html", st=db.settings(), saved=request.args.get("saved"))
+    st = db.settings()
+    return render_template("settings.html", st=st, crit=db.profile_criteria(st), saved=request.args.get("saved"))
 
 
 # ───────── API ─────────
