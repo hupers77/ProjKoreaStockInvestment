@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}종목 선정 대시보드{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<script src="{{ url_for('static', filename='chart.umd.min.js') }}"></script>
+<link rel="icon" href="data:,">
+</head>
+<body>
+<header class="top">
+  <span class="brand">📈 종목 선정 대시보드</span>
+  <nav>
+    {% set ep = request.endpoint %}
+    <a href="{{ url_for('dashboard') }}" class="{{ 'on' if ep=='dashboard' }}">대시보드</a>
+    <a href="{{ url_for('manage') }}" class="{{ 'on' if ep=='manage' }}">보유·제외 종목</a>
+    <a href="{{ url_for('scans') }}" class="{{ 'on' if ep=='scans' }}">스캔 기록</a>
+    <a href="{{ url_for('criteria') }}" class="{{ 'on' if ep=='criteria' }}">평가 기준</a>
+    <a href="{{ url_for('settings') }}" class="{{ 'on' if ep=='settings' }}">설정</a>
+  </nav>
+  <span class="right">다음 자동 스캔: {{ next_run }}</span>
+</header>
+<main>
+{% block body %}{% endblock %}
+<p class="muted small" style="margin-top:24px">이 화면의 점수는 의사결정 보조 자료이며 매수·매도를 보장하거나 권유하지 않습니다. 최종 투자 판단과 책임은 사용자에게 있습니다.</p>
+</main>
+<script>
+async function postJSON(url, body) {
+  const r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})});
+  return r.json();
+}
+async function toggleHold(el, ticker, name) {
+  const j = await postJSON('/api/holding/toggle', {ticker, name});
+  document.querySelectorAll('input.hold[data-t="' + ticker + '"]').forEach(x => x.checked = j.held);
+  if (window.onHoldChanged) window.onHoldChanged(ticker, j.held);
+}
+// 라디오 버튼은 원래 해제가 안 되므로 클릭할 때마다 보유 여부를 뒤집는다
+document.addEventListener('click', e => {
+  const el = e.target;
+  if (el.matches && el.matches('input.hold')) { e.preventDefault(); toggleHold(el, el.dataset.t, el.dataset.n); }
+});
+async function startScan(demo) {
+  const j = await postJSON('/api/scan', {demo});
+  alert(j.message);
+  if (j.ok) pollScan();
+}
+async function pollScan() {
+  const el = document.getElementById('scan-status');
+  const r = await (await fetch('/api/scan/status')).json();
+  if (el && r.scan) el.textContent = (r.running ? '⏳ ' : '') + '#' + r.scan.id + ' ' + r.scan.status + ' · ' + r.scan.message;
+  if (r.running) setTimeout(pollScan, 2000); else if (el && el.dataset.wasRunning) location.reload();
+  if (el && r.running) el.dataset.wasRunning = 1;
+}
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

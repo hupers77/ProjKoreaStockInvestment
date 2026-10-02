@@ -1,0 +1,7 @@
+pykrx>=1.2.9
+finance-datareader>=0.9.90
+flask>=3.0
+apscheduler>=3.10,<4
+pandas>=2.0
+numpy>=1.24
+requests>=2.31

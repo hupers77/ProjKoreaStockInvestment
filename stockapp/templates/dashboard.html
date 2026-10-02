@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card">
+  <div class="row" style="align-items:center;gap:10px">
+    <div style="flex:1 1 300px">
+      {% if scan %}
+        <b>기준일 {{ scan.base_date|d8 }}</b>
+        <span class="muted">· {{ profiles[scan.profile].name }} · {{ scan.n_scored|num }}종목 채점 · 완료 {{ scan.finished_at }}</span>
+        {% if scan.demo %}<span class="badge g-B">데모 데이터</span>{% endif %}
+      {% else %}
+        <b>아직 스캔 결과가 없습니다.</b> <span class="muted">설정에서 KRX 계정을 입력한 뒤 ‘지금 스캔’을 누르거나, ‘데모 스캔’으로 화면을 먼저 확인하세요.</span>
+      {% endif %}
+      <div class="small muted" id="scan-status">{% if last and last.status != 'done' %}#{{ last.id }} {{ last.status }} · {{ last.message }}{% endif %}</div>
+    </div>
+    <button class="btn primary" onclick="startScan(false)" {{ 'disabled' if running }}>지금 스캔</button>
+    <button class="btn" onclick="startScan(true)" {{ 'disabled' if running }}>데모 스캔</button>
+  </div>
+  {% if last and last.status == 'failed' %}<div class="err" style="margin-top:10px">최근 스캔 실패: {{ last.message }}</div>{% endif %}
+  {% for w in warnings %}<div class="warn small" style="margin:8px 0 0">{{ w }}</div>{% endfor %}
+</div>
+
+<div class="stats" style="margin-bottom:14px">
+  {% for g in ['S','A','B','C','X'] %}
+  <div class="stat g-{{g}}" style="text-decoration:none"><div class="v">{{ counts[g] }}</div>
+    <div class="k">{{ grade_info[g][0] }} · {{ grade_info[g][1] }} <span style="opacity:.75">({{ grade_info[g][2] }})</span></div></div>
+  {% endfor %}
+</div>
+
+{% if env %}
+<div class="row">
+  {% for mk, e in env.items() %}
+  <div class="card">
+    <h2>{{ mk }} 시장 환경 <span class="badge g-{{ 'A' if e.score>=8 else 'B' if e.score>=6 else 'C' }}" style="text-decoration:none">{{ e.score|num }}/10</span></h2>
+    <div class="small">지수 {{ e.index|num(2) }} · 20일 {{ e.r20|num(1) }}%</div>
+    <ul class="small" style="margin:6px 0 0;padding-left:18px">{% for c in e.conds %}<li>{{ c }}</li>{% endfor %}</ul>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>보유 종목 ({{ hold_rows|length }})</h2>
+  {% if not hold_rows %}<p class="muted small">표에서 종목명 왼쪽 라디오 버튼을 누르거나 ‘보유·제외 종목’ 메뉴에서 등록하세요.</p>{% else %}
+  <div class="tablewrap"><table>
+    <tr><th class="l">보유</th><th class="l">종목</th><th>등급</th><th>최종</th><th>변화</th><th>단기</th><th>중기</th><th>장기</th>
+        <th>현재가</th><th>매수가</th><th>수익률</th><th>손절가</th><th>목표가</th><th class="l">점검</th></tr>
+    {% for x in hold_rows %}{% set r = x.r %}
+    <tr>
+      <td class="l"><input type="radio" class="hold" data-t="{{ x.h.ticker }}" data-n="{{ x.h.name }}" checked></td>
+      <td class="l"><a href="{{ url_for('stock', ticker=x.h.ticker) }}"><span class="name g-{{ r.grade if r else 'C' }}">{{ x.h.name or x.h.ticker }}</span></a> <span class="muted small">{{ x.h.ticker }}</span></td>
+      {% if r %}
+      <td><span class="badge g-{{ r.grade }}">{{ grade_info[r.grade][0] }}</span></td>
+      <td><b>{{ r.final|num(1) }}</b></td>
+      <td class="{{ 'up' if x.d and x.d>0 else 'down' if x.d and x.d<0 }}">{{ '%+.1f'|format(x.d) if x.d is not none else '-' }}</td>
+      <td>{{ r.s_short|num(1) }}</td><td>{{ r.s_mid|num(1) }}</td><td>{{ r.s_long|num(1) }}</td>
+      <td>{{ r.close|num }}</td><td>{{ x.h.buy_price|num }}</td>
+      <td class="{{ 'up' if x.ret and x.ret>0 else 'down' if x.ret and x.ret<0 }}">{{ '%+.1f%%'|format(x.ret) if x.ret is not none else '-' }}</td>
+      <td>{{ r.stop|num }}</td><td>{{ r.target|num }}</td>
+      <td class="l">{% for a in x.alerts %}<span class="alert">⚠ {{ a }}</span> {% endfor %}{% if not x.alerts %}<span class="muted">이상 없음</span>{% endif %}</td>
+      {% else %}<td colspan="12" class="l muted">최근 스캔에 없음 (상장폐지·코드 오류 확인)</td>{% endif %}
+    </tr>
+    {% endfor %}
+  </table></div>{% endif %}
+</div>
+
+<div class="card">
+  <h2>종목 순위</h2>
+  <div class="legend" style="margin-bottom:8px">종목명 배경색:
+    {% for g in ['S','A','B','C','X'] %}<span class="name g-{{g}}">{{ grade_info[g][0] }} {{ grade_info[g][2] }}</span>{% endfor %}
+    <span class="muted">· 왼쪽 라디오 = 보유 여부(누르면 등록/해제)</span>
+  </div>
+  <div class="filters">
+    <input type="text" id="q" placeholder="종목명·코드 검색" oninput="render(1)">
+    <select id="fg" onchange="render(1)"><option value="">전체 등급</option><option value="SA">S+A</option><option value="SAB">S+A+B</option>
+      {% for g in ['S','A','B','C','X'] %}<option value="{{g}}">{{ grade_info[g][0] }}</option>{% endfor %}</select>
+    <select id="fm" onchange="render(1)"><option value="">전체 시장</option><option>KOSPI</option><option>KOSDAQ</option></select>
+    <select id="fs" onchange="render(1)"><option value="">전체 업종</option></select>
+    <label class="small"><input type="checkbox" id="fh" onchange="render(1)"> 보유만</label>
+    <span class="muted small" id="cnt"></span>
+  </div>
+  <div class="tablewrap"><table id="tbl">
+    <thead><tr>
+      <th class="l" data-k="h">보유</th><th class="l" data-k="n">종목</th><th class="l" data-k="sec">업종</th><th data-k="g">등급</th>
+      <th data-k="f">최종 ▼</th><th data-k="d">변화</th><th data-k="s">단기</th><th data-k="mi">중기</th><th data-k="l">장기</th>
+      <th data-k="cov">커버리지</th><th data-k="c">현재가</th><th data-k="chg">등락</th><th data-k="cap">시총(억)</th><th class="l">비고</th>
+    </tr></thead><tbody></tbody>
+  </table></div>
+  <div class="pager"><button class="btn" onclick="render(page-1)">이전</button><span id="pg"></span><button class="btn" onclick="render(page+1)">다음</button></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const ROWS = {{ rows_json|safe }};
+const GL = {S:'S', A:'A', B:'B', C:'C', X:'제외'};
+const GORD = {S:5, A:4, B:3, C:2, X:1};
+let page = 1, sortK = 'f', sortDir = -1;
+const PER = 100;
+const secs = [...new Set(ROWS.map(r => r.sec).filter(Boolean))].sort();
+const fs = document.getElementById('fs');
+secs.forEach(s => { const o = document.createElement('option'); o.textContent = s; fs.appendChild(o); });
+const fmt = (x, d=0) => x == null ? '-' : Number(x).toLocaleString('ko-KR', {minimumFractionDigits: d, maximumFractionDigits: d});
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+document.querySelectorAll('#tbl th[data-k]').forEach(th => th.onclick = () => {
+  const k = th.dataset.k; sortDir = (sortK === k) ? -sortDir : -1; sortK = k;
+  document.querySelectorAll('#tbl th[data-k]').forEach(x => x.textContent = x.textContent.replace(/ [▲▼]$/, ''));
+  th.textContent += sortDir < 0 ? ' ▼' : ' ▲'; render(1);
+});
+function filtered() {
+  const q = document.getElementById('q').value.trim().toLowerCase();
+  const g = document.getElementById('fg').value, m = document.getElementById('fm').value, s = fs.value;
+  const h = document.getElementById('fh').checked;
+  return ROWS.filter(r => (!q || r.n.toLowerCase().includes(q) || r.t.includes(q)) && (!g || g.includes(r.g))
+    && (!m || r.m === m) && (!s || r.sec === s) && (!h || r.h));
+}
+function render(p) {
+  let rows = filtered();
+  const key = r => sortK === 'g' ? GORD[r.g] : (sortK === 'h' ? (r.h ? 1 : 0) : r[sortK]);
+  rows.sort((a, b) => {
+    let x = key(a), y = key(b);
+    if (x == null) return 1; if (y == null) return -1;
+    if (typeof x === 'string') return sortDir * x.localeCompare(y);
+    return sortDir * (x - y);
+  });
+  const pages = Math.max(1, Math.ceil(rows.length / PER));
+  page = Math.min(Math.max(1, p || 1), pages);
+  document.getElementById('cnt').textContent = rows.length.toLocaleString() + '종목';
+  document.getElementById('pg').textContent = page + ' / ' + pages;
+  document.querySelector('#tbl tbody').innerHTML = rows.slice((page-1)*PER, page*PER).map(r => `
+    <tr>
+      <td class="l"><input type="radio" class="hold" data-t="${r.t}" data-n="${esc(r.n)}" ${r.h ? 'checked' : ''}></td>
+      <td class="l"><a href="/stock/${r.t}"><span class="name g-${r.g}">${esc(r.n)}</span></a> <span class="muted small">${r.t} · ${r.m}</span></td>
+      <td class="l small">${esc(r.sec || '')}</td>
+      <td><span class="badge g-${r.g}" style="text-decoration:none">${GL[r.g]}</span></td>
+      <td><b>${fmt(r.f, 1)}</b></td>
+      <td class="${r.d > 0 ? 'up' : r.d < 0 ? 'down' : ''}">${r.d == null ? '-' : (r.d > 0 ? '+' : '') + fmt(r.d, 1)}</td>
+      <td>${fmt(r.s, 1)}</td><td>${fmt(r.mi, 1)}</td><td>${fmt(r.l, 1)}</td>
+      <td>${fmt(r.cov * 100)}%</td><td>${fmt(r.c)}</td>
+      <td class="${r.chg > 0 ? 'up' : r.chg < 0 ? 'down' : ''}">${fmt(r.chg, 2)}%</td><td>${fmt(r.cap)}</td>
+      <td class="l small">${r.ko ? '<span class="alert">' + esc(r.ko) + '</span>' : esc(r.gate || '')}</td>
+    </tr>`).join('');
+}
+window.onHoldChanged = (t, held) => { ROWS.forEach(r => { if (r.t === t) r.h = held; }); };
+render(1);
+{% if running %}pollScan();{% endif %}
+</script>
+{% endblock %}

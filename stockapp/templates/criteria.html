@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}평가 기준{% endblock %}
+{% block body %}
+<div class="card">
+  <h2>평가 기준 (평가 기준서 v1.0)</h2>
+  <p class="small">각 항목 0~10점 × 가중치 → 관점 점수(100점 환산, N/A 항목은 분모에서 제외) → 프로파일 비중으로 합산 → 가점(최대 +5)·감점(최대 −15) → 등급 게이트 적용.
+  ‘자동’은 무료 데이터(KRX·OpenDART)로 매일 계산하는 항목, ‘수동’은 종목 상세 화면에서 직접 입력하는 항목입니다. 추정값으로 계산하는 항목은 기준서 10장에 따라 최대 6점입니다.</p>
+  <div class="legend">{% for g in ['S','A','B','C','X'] %}<span class="name g-{{g}}">{{ grade_info[g][0] }} · {{ grade_info[g][1] }} ({{ grade_info[g][2] }})</span>{% endfor %}</div>
+</div>
+<div class="row">
+  {% for p, items in groups.items() %}
+  <div class="card"><h2>{{ p }}</h2><table>
+    <tr><th class="l">ID</th><th class="l">항목</th><th>가중치</th><th class="l">입력</th></tr>
+    {% for it in items %}<tr><td class="l">{{ it.id }}{{ ' ★' if it.core }}</td><td class="l">{{ it.name }}</td><td>{{ it.weight }}</td>
+      <td class="l">{% if it.id in auto %}<span class="badge g-A">자동</span>{% else %}<span class="badge g-C">수동</span>{% endif %}</td></tr>{% endfor %}
+    <tr><td></td><td class="l muted small">자동 가중치 합</td><td><b>{{ items|selectattr('id', 'in', auto)|sum(attribute='weight') }}</b></td><td></td></tr>
+  </table></div>
+  {% endfor %}
+</div>
+<div class="row">
+  <div class="card"><h2>사전 제외 필터</h2><ul class="small">{% for k, v in knockouts.items() %}<li>{{ k }} {{ v }}{% if k in ['K1','K3','K7','K8','K9','K10'] %} <span class="badge g-A">자동</span>{% endif %}</li>{% endfor %}</ul></div>
+  <div class="card"><h2>가점·감점</h2><ul class="small">
+    {% for k, v in penalties.items() %}<li>{{ k }} {{ v[0] }} ({{ v[1] }}){% if k=='D4' %} <span class="badge g-A">가격 기준 자동</span>{% endif %}</li>{% endfor %}
+    {% for k, v in bonuses.items() %}<li>{{ k }} {{ v[0] }} (+{{ v[1] }})</li>{% endfor %}</ul></div>
+</div>
+{% endblock %}

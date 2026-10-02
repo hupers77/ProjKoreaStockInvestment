@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}보유·제외 종목{% endblock %}
+{% block body %}
+<datalist id="names"></datalist>
+<div class="card">
+  <h2>보유 종목 등록</h2>
+  <form class="inline" method="post" action="/api/holding">
+    <input type="text" name="ticker" list="names" placeholder="종목코드 (예: 005930)" required oninput="fillName(this)" style="width:170px">
+    <input type="text" name="name" placeholder="종목명" style="width:140px">
+    <input type="text" name="buy_price" placeholder="매수가(원)" style="width:110px">
+    <input type="text" name="qty" placeholder="수량" style="width:80px">
+    <input type="date" name="buy_date">
+    <input type="text" name="memo" placeholder="메모" style="width:180px">
+    <button class="btn primary">저장</button>
+  </form>
+  <p class="small muted">같은 종목코드로 다시 저장하면 매수가·수량·메모가 수정됩니다. 대시보드의 라디오 버튼으로도 보유 등록/해제가 됩니다.</p>
+  <div class="tablewrap"><table>
+    <tr><th class="l">종목</th><th>등급</th><th>최종</th><th>현재가</th><th>매수가</th><th>수량</th><th>수익률</th><th class="l">매수일</th><th class="l">메모</th><th></th></tr>
+    {% for h in holdings %}{% set r = smap.get(h.ticker) %}
+    <tr>
+      <td class="l"><input type="radio" class="hold" data-t="{{ h.ticker }}" data-n="{{ h.name }}" checked>
+        <a href="/stock/{{ h.ticker }}"><span class="name g-{{ r.grade if r else 'C' }}">{{ h.name or h.ticker }}</span></a> <span class="muted small">{{ h.ticker }}</span></td>
+      <td>{{ grade_info[r.grade][0] if r else '-' }}</td><td>{{ r.final|num(1) if r else '-' }}</td>
+      <td>{{ r.close|num if r else '-' }}</td><td>{{ h.buy_price|num }}</td><td>{{ h.qty|num }}</td>
+      <td>{% if r and h.buy_price %}{% set ret=(r.close/h.buy_price-1)*100 %}<span class="{{ 'up' if ret>0 else 'down' }}">{{ '%+.1f%%'|format(ret) }}</span>{% else %}-{% endif %}</td>
+      <td class="l">{{ h.buy_date or '' }}</td><td class="l small">{{ h.memo or '' }}</td>
+      <td><form method="post" action="/api/holding" onsubmit="return confirm('보유 목록에서 삭제할까요?')"><input type="hidden" name="ticker" value="{{ h.ticker }}"><input type="hidden" name="delete" value="1"><button class="btn">삭제</button></form></td>
+    </tr>
+    {% else %}<tr><td colspan="10" class="l muted">등록된 보유 종목이 없습니다.</td></tr>{% endfor %}
+  </table></div>
+</div>
+
+<div class="card">
+  <h2>제외 종목 등록</h2>
+  <form class="inline" method="post" action="/api/exclusion">
+    <input type="text" name="ticker" list="names" placeholder="종목코드" required oninput="fillName(this)" style="width:170px">
+    <input type="text" name="name" placeholder="종목명" style="width:140px">
+    <input type="text" name="reason" placeholder="제외 사유" style="width:260px">
+    <button class="btn primary">추가</button>
+  </form>
+  <p class="small muted">제외 종목은 다음 스캔부터 점수 산정과 순위에서 빠집니다(보유 중이면 계속 표시).</p>
+  <div class="tablewrap"><table>
+    <tr><th class="l">종목</th><th class="l">사유</th><th class="l">등록일</th><th></th></tr>
+    {% for e in exclusions %}
+    <tr><td class="l"><span class="name g-X">{{ e.name or e.ticker }}</span> <span class="muted small">{{ e.ticker }}</span></td>
+      <td class="l">{{ e.reason or '' }}</td><td class="l small">{{ e.added_at }}</td>
+      <td><form method="post" action="/api/exclusion"><input type="hidden" name="ticker" value="{{ e.ticker }}"><input type="hidden" name="delete" value="1"><button class="btn">해제</button></form></td></tr>
+    {% else %}<tr><td colspan="4" class="l muted">등록된 제외 종목이 없습니다.</td></tr>{% endfor %}
+  </table></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const NAMES = {{ names_json|safe }};
+const dl = document.getElementById('names');
+dl.innerHTML = NAMES.map(n => `<option value="${n.ticker}">${n.name} (${n.market})</option>`).join('');
+function fillName(el) {
+  const v = el.value.trim();
+  let hit = NAMES.find(n => n.ticker === v);
+  if (!hit && v.length >= 2) { hit = NAMES.find(n => n.name === v); if (hit) el.value = hit.ticker; }
+  if (hit) el.form.querySelector('[name=name]').value = hit.name;
+}
+window.onHoldChanged = () => location.reload();
+</script>
+{% endblock %}

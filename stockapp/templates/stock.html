@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}{{ r.name }} · 종목 평가{% endblock %}
+{% block body %}
+<div class="card">
+  <div class="row" style="align-items:center">
+    <div style="flex:1 1 320px">
+      <input type="radio" class="hold" data-t="{{ r.ticker }}" data-n="{{ r.name }}" {{ 'checked' if holding }}>
+      <span class="name g-{{ r.grade }}" style="font-size:18px">{{ r.name }}</span>
+      <span class="muted">{{ r.ticker }} · {{ r.market }} · {{ r.sector }}</span>
+      {% if excluded %}<span class="badge g-X">제외 목록</span>{% endif %}
+      <div class="small muted" style="margin-top:6px">평가 기준일 {{ scan.base_date|d8 }} · {{ prof.name }} · 현재가 {{ r.close|num }}원 ({{ '%+.2f'|format(r.chg) }}%) · 시총 {{ ((r.mcap or 0)/1e8)|num }}억</div>
+    </div>
+    <div style="text-align:right">
+      <div class="score-big">{{ r.final|num(1) }}</div>
+      <span class="badge g-{{ r.grade }}" style="font-size:14px">{{ grade_info[r.grade][0] }} · {{ d.grade_label }}</span>
+      <div class="small muted">데이터 신뢰도 {{ d.reliability }} · 커버리지 {{ (r.coverage*100)|num }}%</div>
+    </div>
+  </div>
+  {% for k in d.knockout %}<div class="err small" style="margin-top:8px">제외 필터: {{ k }}</div>{% endfor %}
+  {% for g in d.gate %}<div class="warn small" style="margin-top:8px">등급 게이트: {{ g }}</div>{% endfor %}
+</div>
+
+<div class="row">
+  <div class="card">
+    <h2>관점별 점수</h2>
+    {% for p in ['단기','중기','장기'] %}
+    <div style="margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between"><b>{{ p }} <span class="muted small">(비중 {{ (prof[p]*100)|num }}%)</span></b>
+        <span><b>{{ d.persp[p]|num(1) }}</b> <span class="muted small">/ 100 · 커버리지 {{ (d.cov[p]*100)|num }}%</span></span></div>
+      <div class="bar"><i style="width:{{ d.persp[p] or 0 }}%"></i></div>
+    </div>
+    {% endfor %}
+    <div class="small">기본 종합 {{ r.base|num(1) }} · 가점 +{{ r.bonus|num }} · 감점 {{ r.penalty|num }} → 최종 {{ r.final|num(1) }}</div>
+    {% for a in d.adj %}<div class="small muted">{{ a[0] }} {{ a[1] }} ({{ '%+d'|format(a[2]) }}, {{ a[3] }})</div>{% endfor %}
+  </div>
+  <div class="card">
+    <h2>대응 가격 (S19 기준)</h2>
+    <div class="kv small">
+      <span class="muted">현재가</span><b>{{ r.close|num }}원</b>
+      <span class="muted">1차 목표가</span><b class="up">{{ r.target|num }}원 {% if r.target %}({{ '%+.1f'|format((r.target/r.close-1)*100) }}%){% endif %}</b>
+      <span class="muted">손절가</span><b class="down">{{ r.stop|num }}원 {% if r.stop %}({{ '%+.1f'|format((r.stop/r.close-1)*100) }}%){% endif %}</b>
+      {% if holding %}<span class="muted">매수가 / 수익률</span><b>{{ holding.buy_price|num }}원 {% if holding.buy_price %}({{ '%+.1f'|format((r.close/holding.buy_price-1)*100) }}%){% endif %}</b>{% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="card" style="flex:2 1 500px"><h2>주가 (이동평균 20·60·120)</h2>
+    {% if px_json == "[]" %}<p class="muted small">저장된 시세가 없습니다.</p>{% else %}<canvas id="px" height="110"></canvas>{% endif %}</div>
+  <div class="card" style="flex:1 1 300px"><h2>점수 추이</h2><canvas id="hist" height="160"></canvas></div>
+</div>
+
+<div class="card">
+  <h2>항목별 평가</h2>
+  <p class="small muted">자동 점수를 바꾸거나 N/A 항목(해자·지배구조·컨센서스 등)을 직접 채우려면 ‘수동’ 칸에 0~10점을 넣고 저장하세요. 수동 점수는 자동 점수보다 우선하며 다음 스캔에도 계속 적용됩니다.
+    {% if not can_rescore %}<br><b>서버가 재시작되어 즉시 재계산은 안 되고, 다음 스캔에 반영됩니다.</b>{% endif %}</p>
+  {% for p, items in groups.items() %}
+  <h3 style="font-size:14px;margin:16px 0 6px">{{ p }} 평가 <span class="muted small">· {{ d.persp[p]|num(1) }}점</span></h3>
+  <div class="tablewrap"><table>
+    <tr><th class="l">ID</th><th class="l">평가 항목</th><th>가중치</th><th>점수</th><th>가중점수</th><th class="l">데이터값</th><th class="l">평가 근거</th><th class="l">수동(0~10)</th><th class="l">메모</th></tr>
+    {% for it in items %}{% set v = d['items'][it.id] %}{% set m = manual.get(it.id) %}
+    <tr>
+      <td class="l">{{ it.id }}{{ ' ★' if it.core }}</td>
+      <td class="l">{{ it.name }}</td>
+      <td>{{ it.weight }}</td>
+      <td>{% if v[0] is none %}<span class="na">N/A</span>{% else %}<b>{{ v[0]|num }}</b>{% if v[3] %}<span class="est">추정</span>{% endif %}{% if v[4]=='수동' %}<span class="man">수동</span>{% endif %}{% endif %}</td>
+      <td>{{ (v[0]*it.weight/10)|num(1) if v[0] is not none else '-' }}</td>
+      <td class="val">{{ v[1] }}</td>
+      <td class="basis">{{ v[2] }}</td>
+      <td class="l"><input type="number" min="0" max="10" step="1" style="width:64px" data-item="{{ it.id }}" class="mscore" value="{{ m.score|int if m else '' }}"></td>
+      <td class="l"><input type="text" style="width:200px" data-item="{{ it.id }}" class="mnote" value="{{ m.note if m else '' }}" placeholder="근거·출처"></td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% endfor %}
+
+  <h3 style="font-size:14px;margin:16px 0 6px">가점·감점 (해당하면 체크)</h3>
+  <div class="row small">
+    <div>{% for k, v in penalties.items() %}<label style="display:block"><input type="checkbox" class="madj" data-item="{{ k }}" {{ 'checked' if manual.get(k) and manual[k].score }}> {{ k }} {{ v[0] }} ({{ v[1] }})</label>{% endfor %}</div>
+    <div>{% for k, v in bonuses.items() %}<label style="display:block"><input type="checkbox" class="madj" data-item="{{ k }}" {{ 'checked' if manual.get(k) and manual[k].score }}> {{ k }} {{ v[0] }} (+{{ v[1] }})</label>{% endfor %}</div>
+  </div>
+  <div style="margin-top:12px"><button class="btn primary" onclick="saveManual()">수동 입력 저장</button> <span id="msave" class="small muted"></span></div>
+</div>
+
+<div class="card small muted">
+  <b>데이터 출처·기준일</b>
+  <ul style="margin:6px 0 0;padding-left:18px">{% for k, v in sources.items() %}<li>{{ k }}: {{ v }}</li>{% endfor %}</ul>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const PX = {{ px_json|safe }}, HIST = {{ hist_json|safe }};
+const TARGET = {{ r.target or 'null' }}, STOP = {{ r.stop or 'null' }};
+function ma(arr, n) { return arr.map((_, i) => i < n - 1 ? null : arr.slice(i - n + 1, i + 1).reduce((a, b) => a + b, 0) / n); }
+if (PX.length && window.Chart) {
+  const c = PX.map(x => x.close), lab = PX.map(x => x.date.slice(2));
+  const ds = [{label: '종가', data: c, borderColor: '#1d232b', borderWidth: 1.5, pointRadius: 0},
+    {label: '20일', data: ma(c, 20), borderColor: '#e07b00', borderWidth: 1, pointRadius: 0},
+    {label: '60일', data: ma(c, 60), borderColor: '#2457c5', borderWidth: 1, pointRadius: 0},
+    {label: '120일', data: ma(c, 120), borderColor: '#7a3ec8', borderWidth: 1, pointRadius: 0}];
+  if (TARGET) ds.push({label: '목표가', data: c.map(() => TARGET), borderColor: '#d43c3c', borderDash: [5, 4], borderWidth: 1, pointRadius: 0});
+  if (STOP) ds.push({label: '손절가', data: c.map(() => STOP), borderColor: '#2a62d6', borderDash: [5, 4], borderWidth: 1, pointRadius: 0});
+  new Chart(document.getElementById('px'), {type: 'line', data: {labels: lab, datasets: ds},
+    options: {animation: false, interaction: {mode: 'index', intersect: false}, plugins: {legend: {labels: {boxWidth: 12}}}, scales: {x: {ticks: {maxTicksLimit: 10}}}}});
+}
+if (window.Chart) new Chart(document.getElementById('hist'), {type: 'line', data: {labels: HIST.map(h => (h.base_date || '').slice(4)),
+  datasets: [{label: '최종', data: HIST.map(h => h.final), borderColor: '#0f7b4b', pointRadius: 2},
+    {label: '단기', data: HIST.map(h => h.s_short), borderColor: '#e07b00', borderWidth: 1, pointRadius: 0},
+    {label: '중기', data: HIST.map(h => h.s_mid), borderColor: '#2457c5', borderWidth: 1, pointRadius: 0},
+    {label: '장기', data: HIST.map(h => h.s_long), borderColor: '#7a3ec8', borderWidth: 1, pointRadius: 0}]},
+  options: {animation: false, scales: {y: {min: 0, max: 100}}, plugins: {legend: {labels: {boxWidth: 12}}}}});
+async function saveManual() {
+  const items = [];
+  document.querySelectorAll('input.mscore').forEach(el => {
+    const note = document.querySelector('input.mnote[data-item="' + el.dataset.item + '"]').value;
+    let v = el.value === '' ? null : Math.max(0, Math.min(10, Number(el.value)));
+    items.push({item: el.dataset.item, score: v, note});
+  });
+  document.querySelectorAll('input.madj').forEach(el => items.push({item: el.dataset.item, score: el.checked ? 1 : null}));
+  const j = await postJSON('/api/manual', {ticker: '{{ r.ticker }}', items});
+  document.getElementById('msave').textContent = j.rescored ? '저장하고 다시 계산했습니다.' : '저장했습니다. 다음 스캔에 반영됩니다.';
+  if (j.rescored) setTimeout(() => location.reload(), 600);
+}
+</script>
+{% endblock %}

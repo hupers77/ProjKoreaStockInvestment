@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}스캔 기록{% endblock %}
+{% block body %}
+<div class="card">
+  <div class="row" style="align-items:center">
+    <div style="flex:1"><b>스캔 기록</b> <span class="muted small">· 평일 {{ next_run }} 자동 실행 (설정에서 시각 변경)</span>
+      <div class="small muted" id="scan-status"></div></div>
+    <button class="btn primary" onclick="startScan(false)" {{ 'disabled' if running }}>지금 스캔</button>
+    <button class="btn" onclick="startScan(true)" {{ 'disabled' if running }}>데모 스캔</button>
+  </div>
+</div>
+<div class="card"><div class="tablewrap"><table>
+  <tr><th>#</th><th class="l">시작</th><th class="l">종료</th><th class="l">기준일</th><th class="l">프로파일</th><th class="l">실행</th><th class="l">상태</th><th>종목수</th><th class="l">메시지·경고</th></tr>
+  {% for s in rows %}
+  <tr><td>{{ s.id }}</td><td class="l small">{{ s.started_at }}</td><td class="l small">{{ s.finished_at or '' }}</td>
+    <td class="l">{{ s.base_date|d8 }}{% if s.demo %} <span class="badge g-B">데모</span>{% endif %}</td><td class="l">{{ s.profile }}</td>
+    <td class="l small">{{ '자동' if s.trigger=='schedule' else '수동' }}</td>
+    <td class="l"><span class="{{ 'alert' if s.status=='failed' }}">{{ {'done':'완료','failed':'실패','running':'진행 중'}.get(s.status, s.status) }}</span></td>
+    <td>{{ s.n_scored|num if s.n_scored else '' }}</td>
+    <td class="basis">{{ s.message }}{% for w in s.warn_list %}<div class="muted">· {{ w }}</div>{% endfor %}</td></tr>
+  {% else %}<tr><td colspan="9" class="l muted">스캔 기록이 없습니다.</td></tr>{% endfor %}
+</table></div></div>
+{% endblock %}
+{% block scripts %}<script>{% if running %}pollScan();{% endif %}</script>{% endblock %}
