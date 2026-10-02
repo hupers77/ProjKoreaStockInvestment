@@ -1,6 +1,7 @@
 """SQLite 저장소: 가격 캐시, 보유·제외 종목, 수동 점수, 스캔 결과, 설정."""
 import json
 import os
+import struct
 import sqlite3
 import threading
 import zlib
@@ -70,6 +71,7 @@ def init():
         c.executescript(SCHEMA)
         for k, v in DEFAULTS.items():
             c.execute("INSERT OR IGNORE INTO settings(key, value) VALUES(?, ?)", (k, v))
+    repair_numeric_blobs()
 
 
 # ── 설정 ──
@@ -208,6 +210,48 @@ def prev_scan(scan_id):
     return dict(r) if r else None
 
 
+NUM_COLS = ("close", "chg", "mcap", "s_short", "s_mid", "s_long", "base", "bonus", "penalty", "final",
+            "coverage", "core_avg", "target", "stop")
+
+
+def _num(x):
+    """numpy 정수·실수를 파이썬 float로 바꾼다. numpy int64를 그대로 넣으면 SQLite에 bytes로 저장된다."""
+    if x is None:
+        return None
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return None
+    return None if v != v else v  # NaN → None
+
+
+def _from_blob(v):
+    """예전 버전이 bytes로 저장한 숫자를 복원한다 (8바이트 little-endian int64)."""
+    if isinstance(v, (bytes, bytearray, memoryview)):
+        b = bytes(v)
+        if len(b) == 8:
+            return float(struct.unpack("<q", b)[0])
+        if len(b) == 4:
+            return float(struct.unpack("<i", b)[0])
+        return None
+    return v
+
+
+def _fix_row(d):
+    for k in NUM_COLS:
+        if k in d:
+            d[k] = _from_blob(d[k])
+    return d
+
+
+def repair_numeric_blobs():
+    """이미 저장된 scores 행 중 bytes로 들어간 숫자를 고친다 (재스캔 불필요)."""
+    with conn() as c:
+        for col in NUM_COLS:
+            rows = c.execute(f"SELECT rowid, {col} FROM scores WHERE typeof({col})='blob'").fetchall()
+            c.executemany(f"UPDATE scores SET {col}=? WHERE rowid=?", [(_from_blob(r[1]), r[0]) for r in rows])
+
+
 def save_scores(scan_id, results):
     rows = []
     for r in results:
@@ -216,10 +260,11 @@ def save_scores(scan_id, results):
             "persp": r["persp"], "cov": r["cov"], "adj": r["adj"], "gate": r["gate"],
             "knockout": r["knockout"], "reliability": r["reliability"], "grade_label": r["grade_label"],
         }
-        rows.append((scan_id, r["ticker"], r["name"], r["market"], r["sector"], r["close"], r["chg"], r["mcap"],
-                     r["persp"]["단기"], r["persp"]["중기"], r["persp"]["장기"], r["base"], r["bonus"], r["penalty"],
-                     r["final"], r["grade"], r["coverage"], r["core_avg"], " / ".join(r["knockout"]),
-                     " / ".join(r["gate"]), r["target"], r["stop"],
+        n = _num
+        rows.append((scan_id, str(r["ticker"]), str(r["name"]), r["market"], r["sector"], n(r["close"]), n(r["chg"]),
+                     n(r["mcap"]), n(r["persp"]["단기"]), n(r["persp"]["중기"]), n(r["persp"]["장기"]), n(r["base"]),
+                     n(r["bonus"]), n(r["penalty"]), n(r["final"]), r["grade"], n(r["coverage"]), n(r["core_avg"]),
+                     " / ".join(r["knockout"]), " / ".join(r["gate"]), n(r["target"]), n(r["stop"]),
                      zlib.compress(json.dumps(detail, ensure_ascii=False, default=float).encode())))
     with conn() as c:
         c.executemany(f"INSERT OR REPLACE INTO scores VALUES({','.join('?' * 23)})", rows)
@@ -227,7 +272,7 @@ def save_scores(scan_id, results):
 
 def scores(scan_id):
     with conn() as c:
-        return [dict(r) for r in c.execute(
+        return [_fix_row(dict(r)) for r in c.execute(
             "SELECT * FROM scores WHERE scan_id=? ORDER BY (grade='X'), final DESC, core_avg DESC", (scan_id,))]
 
 
@@ -236,14 +281,14 @@ def score_detail(scan_id, ticker):
         r = c.execute("SELECT * FROM scores WHERE scan_id=? AND ticker=?", (scan_id, ticker)).fetchone()
     if not r:
         return None
-    d = dict(r)
+    d = _fix_row(dict(r))
     d["detail"] = json.loads(zlib.decompress(d["detail"])) if d["detail"] else None
     return d
 
 
 def score_history(ticker, limit=60):
     with conn() as c:
-        return [dict(r) for r in c.execute(
+        return [_fix_row(dict(r)) for r in c.execute(
             """SELECT s.base_date, s.id, sc.final, sc.grade, sc.s_short, sc.s_mid, sc.s_long, sc.close
                FROM scores sc JOIN scans s ON s.id=sc.scan_id
                WHERE sc.ticker=? AND s.status='done' ORDER BY s.id DESC LIMIT ?""", (ticker, limit))][::-1]
