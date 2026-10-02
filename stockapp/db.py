@@ -88,11 +88,11 @@ def settings():
 
 
 CRITERIA_KEYS = ("k7_value_eok", "k8_mcap_eok", "gate_s_cov", "gate_a_cov")
-PROFILE_KEYS = ("A", "B", "C", "D")
+PROFILE_KEYS = ("U", "A", "B", "C", "D")  # U = 초단기
 
 
 def profile_criteria(st=None):
-    """프로파일(A~D)별 점수 기준. 저장된 값이 없으면 공통 기본값을 쓴다."""
+    """프로파일(초단기·A~D)별 점수 기준. 저장된 값이 없으면 공통 기본값을 쓴다."""
     st = st or settings()
     out = {}
     for p in PROFILE_KEYS:
