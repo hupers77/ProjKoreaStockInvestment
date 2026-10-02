@@ -13,9 +13,9 @@
   </div>
 </div>
 <div class="card"><div class="tablewrap"><table>
-  <tr><th>#</th><th class="l">스캔 번호</th><th class="l">시작</th><th class="l">종료</th><th class="l">기준일</th><th class="l">프로파일</th><th class="l">실행</th><th class="l">상태</th><th>종목수</th><th class="l">메시지·경고</th></tr>
+  <tr><th>#</th><th>소요 시간</th><th class="l">시작</th><th class="l">종료</th><th class="l">기준일</th><th class="l">프로파일</th><th class="l">실행</th><th class="l">상태</th><th>종목수</th><th class="l">메시지·경고</th></tr>
   {% for s in rows %}
-  <tr><td>{{ s.no }}</td><td class="l small">{{ s.code or s.id }}</td><td class="l small">{{ s.started_at }}</td><td class="l small">{{ s.finished_at or '' }}</td>
+  <tr><td>{{ s.no }}</td><td class="small">{{ s.elapsed }}</td><td class="l small">{{ s.started_at }}</td><td class="l small">{{ s.finished_at or '' }}</td>
     <td class="l">{{ s.base_date|d8 }}{% if s.demo %} <span class="badge g-B">데모</span>{% endif %}</td><td class="l">{{ s.profile }}</td>
     <td class="l small">{{ {'schedule':'자동','recalc':'재계산','bt-fetch':'검증 스캔','bt-calc':'검증 계산'}.get(s.trigger, '수동') }}</td>
     <td class="l"><span class="{{ 'alert' if s.status=='failed' }}">{{ {'done':'완료','failed':'실패','running':'진행 중'}.get(s.status, s.status) }}</span></td>

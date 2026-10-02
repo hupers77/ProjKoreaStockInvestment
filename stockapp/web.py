@@ -256,6 +256,19 @@ def manage():
                            names_json=json.dumps(db.stock_names(), ensure_ascii=False))
 
 
+def _elapsed(start, end):
+    """스캔 소요 시간 '3분 12초' (진행 중이면 지금까지)."""
+    try:
+        t0 = datetime.strptime(start, "%Y-%m-%d %H:%M:%S")
+        t1 = datetime.strptime(end, "%Y-%m-%d %H:%M:%S") if end else datetime.now()
+    except (TypeError, ValueError):
+        return ""
+    sec = max(0, int((t1 - t0).total_seconds()))
+    h, m, s_ = sec // 3600, sec % 3600 // 60, sec % 60
+    txt = f"{h}시간 {m}분" if h else f"{m}분 {s_}초" if m else f"{s_}초"
+    return txt if end else txt + " (진행 중)"
+
+
 @app.route("/scans")
 def scans():
     per = 20
@@ -265,6 +278,7 @@ def scans():
     rows = db.scans(per, (page - 1) * per)
     for i, r in enumerate(rows):
         r["no"] = total - (page - 1) * per - i  # 화면 번호 = 오래된 것부터 센 순번
+        r["elapsed"] = _elapsed(r.get("started_at"), r.get("finished_at"))
     for r in rows:
         r["warn_list"] = json.loads(r["warnings"] or "[]")
     last = db.latest_scan()
