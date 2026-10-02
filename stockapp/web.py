@@ -62,6 +62,11 @@ def num(x, d=0):
 
 # ───────── 화면 ─────────
 
+@app.route("/favicon.ico")
+def favicon():
+    return app.send_static_file("favicon-32.png")
+
+
 @app.route("/")
 def dashboard():
     scan = db.latest_scan()
