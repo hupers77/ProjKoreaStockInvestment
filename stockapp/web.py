@@ -153,7 +153,7 @@ def scans():
     rows = db.scans(60)
     for r in rows:
         r["warn_list"] = json.loads(r["warnings"] or "[]")
-    return render_template("scans.html", rows=rows)
+    return render_template("scans.html", rows=rows, saved=scanner.saved_bundle_info())
 
 
 @app.route("/criteria", methods=["GET", "POST"])
@@ -269,8 +269,13 @@ def api_manual():
 
 @app.post("/api/scan")
 def api_scan():
-    demo = bool((request.get_json(silent=True) or {}).get("demo"))
-    started = scanner.run_async("manual", demo)
+    j = request.get_json(silent=True) or {}
+    if j.get("recalc"):
+        if not scanner.saved_bundle_info():
+            return jsonify(ok=False, message="재계산할 저장 데이터가 없습니다. 먼저 '지금 스캔'을 한 번 실행하세요.")
+        started = scanner.run_async("recalc")
+        return jsonify(ok=started, message="저장된 데이터로 재계산을 시작했습니다." if started else "이미 스캔이 진행 중입니다.")
+    started = scanner.run_async("manual", bool(j.get("demo")))
     return jsonify(ok=started, message="스캔을 시작했습니다." if started else "이미 스캔이 진행 중입니다.")
 
 
