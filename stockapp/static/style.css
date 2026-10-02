@@ -85,5 +85,4 @@ form.inline { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
   :root:not([data-theme="light"]) .warn { background: #3a3114; border-color: #6b5a1d; color: #f3e2a8; }
   :root:not([data-theme="light"]) td.basis { color: #c3cbd5; }
 }
-.env-dot { display: inline-block; width: 14px; height: 14px; border-radius: 50%; vertical-align: -1px; margin-left: 4px; }
-.env-good { background: #2e9e4f; } .env-fair { background: #2f6fdb; } .env-weak { background: #f2c230; } .env-bad { background: #e0413a; }
+.env-icon { font-size: 22px; vertical-align: -2px; cursor: default; }
