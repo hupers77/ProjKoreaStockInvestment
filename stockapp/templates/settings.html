@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}설정{% endblock %}
 {% block body %}
-{% if saved %}<div class="ok">저장했습니다.</div>{% endif %}
+{% if saved %}<div class="ok">저장했습니다. 점수에 바로 반영하려면 재계산하세요. <button type="button" class="btn green" style="padding:3px 10px;margin-left:8px" onclick="recalc()">지금 재계산</button></div>{% endif %}
 <form method="post">
 <div class="card">
   <h2>자동 스캔</h2>

@@ -153,7 +153,10 @@ def scans():
     rows = db.scans(60)
     for r in rows:
         r["warn_list"] = json.loads(r["warnings"] or "[]")
-    return render_template("scans.html", rows=rows, saved=scanner.saved_bundle_info())
+    last = db.latest_scan()
+    changed_at = db.raw_setting("scoring_changed_at")
+    changed = bool(changed_at and last and changed_at > (last.get("finished_at") or ""))
+    return render_template("scans.html", rows=rows, saved=scanner.saved_bundle_info(), changed=changed)
 
 
 @app.route("/criteria", methods=["GET", "POST"])
@@ -173,6 +176,7 @@ def criteria():
                 d[f"p{p}.w.{iid}"] = max(0.0, min(50.0, float(v)))
             except ValueError:
                 d[f"p{p}.w.{iid}"] = meta["weight"]
+        d["scoring_changed_at"] = db.now()
         db.save_raw_settings(d)
         return redirect(url_for("criteria", p=p, saved=1))
     groups = {g: [ITEM_MAP[i[0]] for i in ITEMS if i[1] == g] for g in PERSPECTIVES}
@@ -204,6 +208,7 @@ def settings():
                     raw[f"p{pk}.{k}"] = float(v)
                 except ValueError:
                     pass
+        raw["scoring_changed_at"] = db.now()
         db.save_raw_settings(raw)
         schedule()
         return redirect(url_for("settings", saved=1))
@@ -272,7 +277,7 @@ def api_scan():
     j = request.get_json(silent=True) or {}
     if j.get("recalc"):
         if not scanner.saved_bundle_info():
-            return jsonify(ok=False, message="재계산할 저장 데이터가 없습니다. 먼저 '지금 스캔'을 한 번 실행하세요.")
+            return jsonify(ok=False, nodata=True, message="재계산에 쓸 저장 데이터가 아직 없습니다.")
         started = scanner.run_async("recalc")
         return jsonify(ok=started, message="저장된 데이터로 재계산을 시작했습니다." if started else "이미 스캔이 진행 중입니다.")
     started = scanner.run_async("manual", bool(j.get("demo")))

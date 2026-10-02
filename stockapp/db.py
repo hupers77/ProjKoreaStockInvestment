@@ -130,6 +130,12 @@ def save_raw_settings(d):
             c.execute("INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)", (k, str(v)))
 
 
+def raw_setting(key, default=None):
+    with conn() as c:
+        r = c.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    return r[0] if r else default
+
+
 def save_settings(d):
     with conn() as c:
         for k, v in d.items():

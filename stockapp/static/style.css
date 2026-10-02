@@ -31,6 +31,7 @@ main { max-width: 1400px; margin: 0 auto; padding: 16px; }
 .ok { background: #e6f6ec; border: 1px solid #a9dcb9; color: #0b4a26; padding: 8px 12px; border-radius: 8px; margin-bottom: 10px; }
 .btn { display: inline-block; border: 1px solid var(--line); background: #fff; color: var(--text); padding: 7px 12px;
   border-radius: 7px; cursor: pointer; font-size: 13px; }
+.btn.green { background: #1f9d55; color: #fff; border-color: #1f9d55; }
 .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
 .btn:disabled { opacity: .5; cursor: default; }
 input[type=text], input[type=number], input[type=password], input[type=date], input[type=time], select, textarea {

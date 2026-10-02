@@ -51,6 +51,15 @@ async function startScan(demo, recalc) {
   alert(j.message);
   if (j.ok) pollScan();
 }
+async function recalc() {  // 데이터 조회 없이 현재 설정·가중치로 다시 채점
+  const j = await postJSON('/api/scan', {recalc: true});
+  if (j.nodata) {
+    if (confirm('재계산에 쓸 저장 데이터가 아직 없습니다.\n이번 한 번은 데이터를 받아 전체 스캔을 해야 하고, 그 다음부터는 재계산만으로 바로 반영됩니다.\n지금 스캔할까요?')) return startScan(false);
+    return;
+  }
+  alert(j.message);
+  if (j.ok) { if (location.pathname === '/scans' || location.pathname === '/') pollScan(); else location.href = '/scans'; }
+}
 async function pollScan() {
   const el = document.getElementById('scan-status');
   const r = await (await fetch('/api/scan/status')).json();

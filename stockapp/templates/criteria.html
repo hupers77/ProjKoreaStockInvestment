@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}평가 기준{% endblock %}
 {% block body %}
-{% if saved %}<div class="ok">{{ profiles[p].name }} 가중치를 저장했습니다. 다음 스캔부터 적용됩니다.</div>{% endif %}
+{% if saved %}<div class="ok">{{ profiles[p].name }} 가중치를 저장했습니다. 점수에 바로 반영하려면 재계산하세요. <button type="button" class="btn green" style="padding:3px 10px;margin-left:8px" onclick="recalc()">지금 재계산</button></div>{% endif %}
 <div class="card">
   <h2>평가 기준 (평가 기준서 v1.0)</h2>
   <p class="small">각 항목 0~10점 × 가중치 → 관점 점수(100점 환산, N/A 항목은 분모에서 제외) → 프로파일 비중으로 합산 → 가점(최대 +5)·감점(최대 −15) → 등급 게이트 적용.

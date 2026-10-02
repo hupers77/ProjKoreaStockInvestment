@@ -5,8 +5,9 @@
   <div class="row" style="align-items:center">
     <div style="flex:1"><b>스캔 기록</b> <span class="muted small">· 평일 {{ next_run }} 자동 실행 (설정에서 시각 변경)</span>
       <div class="small muted">재계산: 데이터를 새로 받지 않고 {% if saved %}저장된 {{ (saved.base_date or '')|d8 }} 데이터{% if saved.demo %}(데모){% endif %}{% else %}마지막 스캔 데이터{% endif %}를 현재 프로파일·점수 기준·가중치·수동 입력으로 다시 채점합니다.</div>
+      {% if changed %}<div class="small" style="color:#1f7a45;font-weight:600">평가 기준·설정이 마지막 스캔 뒤에 바뀌었습니다. 재계산을 누르면 바로 반영됩니다.</div>{% endif %}
       <div class="small muted" id="scan-status"></div></div>
-    <button class="btn" onclick="startScan(false, true)" {{ 'disabled' if running or not saved }} title="{{ '데이터 조회 없이 현재 설정으로 다시 채점' if saved else '먼저 지금 스캔을 한 번 실행하세요' }}">재계산</button>
+    <button class="btn green" onclick="recalc()" {{ 'disabled' if running }} title="데이터 조회 없이 현재 설정·평가 기준으로 다시 채점">재계산</button>
     <button class="btn primary" onclick="startScan(false)" {{ 'disabled' if running }}>지금 스캔</button>
     <button class="btn" onclick="startScan(true)" {{ 'disabled' if running }}>데모 스캔</button>
   </div>
