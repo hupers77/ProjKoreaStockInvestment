@@ -8,12 +8,12 @@
         <span class="muted">· {{ profiles[scan.profile].name }} · {{ scan.n_scored|num }}종목 채점 · 완료 {{ scan.finished_at }}</span>
         {% if scan.demo %}<span class="badge g-B">데모 데이터</span>{% endif %}
       {% else %}
-        <b>아직 스캔 결과가 없습니다.</b> <span class="muted">설정에서 KRX 계정을 입력한 뒤 ‘지금 스캔’을 누르거나, ‘데모 스캔’으로 화면을 먼저 확인하세요.</span>
+        <b>아직 스캔 결과가 없습니다.</b> <span class="muted">설정에서 KRX 계정을 입력한 뒤 ‘지금 스캔’을 누르세요. 화면만 먼저 보려면 스캔 기록 메뉴의 ‘데모 스캔’을 쓰세요.</span>
       {% endif %}
       <div class="small muted" id="scan-status">{% if last and last.status != 'done' %}#{{ last.id }} {{ last.status }} · {{ last.message }}{% endif %}</div>
     </div>
+    <button class="btn green" onclick="recalc()" {{ 'disabled' if running }} title="데이터 조회 없이 현재 설정·평가 기준으로 다시 채점">재계산</button>
     <button class="btn primary" onclick="startScan(false)" {{ 'disabled' if running }}>지금 스캔</button>
-    <button class="btn" onclick="startScan(true)" {{ 'disabled' if running }}>데모 스캔</button>
   </div>
   {% if last and last.status == 'failed' %}<div class="err scan-msg" style="margin-top:10px">최근 스캔 실패: {{ last.message }}</div>{% endif %}
   {% for w in warnings %}<div class="warn small scan-msg" style="margin:8px 0 0">{{ w }}</div>{% endfor %}
