@@ -138,7 +138,7 @@ function ma(arr, n) { return arr.map((_, i) => i < n - 1 ? null : arr.slice(i - 
 if (PX.length && window.Chart) {
   const all = PX.concat(AFTER);  // 기준일 이후도 같은 선으로 이어 그린다
   const c = all.map(x => x.close), lab = all.map(x => x.date.slice(2));
-  const ds = [{label: '종가', data: c, borderColor: '#1d232b', borderWidth: 1.5, pointRadius: 0},
+  const ds = [{label: '종가', data: c, borderColor: '#16a34a', backgroundColor: '#16a34a', borderWidth: 2.5, pointRadius: 0},
     {label: '20일', data: ma(c, 20), borderColor: '#e07b00', borderWidth: 1, pointRadius: 0},
     {label: '60일', data: ma(c, 60), borderColor: '#2457c5', borderWidth: 1, pointRadius: 0},
     {label: '120일', data: ma(c, 120), borderColor: '#7a3ec8', borderWidth: 1, pointRadius: 0}];
