@@ -115,29 +115,136 @@ def dashboard():
 
 @app.route("/stock/<ticker>")
 def stock(ticker):
-    scan = db.latest_scan()
-    if not scan:
+    """종목 상세. ?scan=ID로 과거 기준일(투자검증 포함) 시점의 평가를 볼 수 있다."""
+    sid = request.args.get("scan", type=int)
+    scan = db.scan(sid) if sid else db.latest_scan()
+    if not scan or scan["status"] != "done":
         return redirect(url_for("dashboard"))
+    bt = scan.get("kind") == "bt"
     r = db.score_detail(scan["id"], ticker)
-    if not r:
+    if not r or not r["detail"]:
         abort(404)
+    base = scan["base_date"]
     meta = json.loads(scan["env"] or "{}")
-    hist = db.score_history(ticker)
+    hist = db.score_history(ticker, upto=base) if bt else db.score_history(ticker)
     manual = db.manual_scores().get(ticker, {})
     holding = next((h for h in db.holdings() if h["ticker"] == ticker), None)
     excluded = any(e["ticker"] == ticker for e in db.exclusions())
     groups = {p: [ITEM_MAP[i[0]] for i in ITEMS if i[1] == p] for p in PERSPECTIVES}
-    with db.conn() as c:
-        px = [dict(x) for x in c.execute(
-            "SELECT date, close, high, low, volume FROM prices WHERE ticker=? ORDER BY date DESC LIMIT 260", (ticker,))][::-1]
-    b = scanner.LAST["bundle"]
-    if not px and b is not None and ticker in b.close.columns:  # 데모 등 DB에 시세가 없는 경우
-        s = b.close[ticker].dropna().iloc[-260:]
-        px = [{"date": d.strftime("%Y%m%d"), "close": float(v)} for d, v in s.items()]
+    if scan["demo"]:  # 데모는 DB에 시세가 없으므로 같은 가상 시세를 다시 만든다
+        from .demo import full_close
+        fc = full_close()
+        s_ = fc[ticker].dropna() if ticker in fc.columns else fc.iloc[:, :0]
+        px = [{"date": d.strftime("%Y%m%d"), "close": float(v)} for d, v in s_.items() if d.strftime("%Y%m%d") <= base][-260:]
+        px_after = [{"date": d.strftime("%Y%m%d"), "close": float(v)} for d, v in s_.items() if d.strftime("%Y%m%d") > base]
+    else:
+        with db.conn() as c:
+            px = [dict(x) for x in c.execute(
+                "SELECT date, close FROM prices WHERE ticker=? AND date<=? AND close>0 ORDER BY date DESC LIMIT 260",
+                (ticker, base))][::-1]
+            px_after = [dict(x) for x in c.execute(
+                "SELECT date, close FROM prices WHERE ticker=? AND date>? AND close>0 ORDER BY date", (ticker, base))] if bt else []
+    if not bt:
+        px_after = []
+    res = None
+    if bt:
+        from . import verify as vf
+        live = db.latest_scan()
+        nw = db.score_detail(live["id"], ticker) if live else None
+        res = {"now": nw, "eval_date": px_after[-1]["date"] if px_after else None}
+        if px_after and r["close"]:
+            cl = [x["close"] for x in px_after]
+            res.update(last=cl[-1], ret=(cl[-1] / r["close"] - 1) * 100, mx=(max(cl) / r["close"] - 1) * 100,
+                       mn=(min(cl) / r["close"] - 1) * 100)
+            im = vf.index_returns(base, res["eval_date"], scan["demo"]).get(r["market"])
+            res["idx"] = im
+            res["ex"] = res["ret"] - im["ret"] if im else None
     return render_template("stock.html", scan=scan, r=r, d=r["detail"], groups=groups, manual=manual, hist=hist,
-                           holding=holding, excluded=excluded, sources=meta.get("sources", {}),
-                           px_json=json.dumps(px), hist_json=json.dumps(hist), penalties=PENALTIES, bonuses=BONUSES,
+                           holding=holding, excluded=excluded, sources=meta.get("sources", {}), bt=bt, res=res,
+                           options=db.ticker_scans(ticker), options_live_id=(db.latest_scan() or {}).get("id"), px_json=json.dumps(px), after_json=json.dumps(px_after),
+                           hist_json=json.dumps(hist), penalties=PENALTIES, bonuses=BONUSES,
                            prof=PROFILES.get(scan["profile"], PROFILES["C"]), can_rescore=scanner.LAST["scan_id"] == scan["id"])
+
+
+@app.route("/verify")
+def verify():
+    """투자검증: 과거 기준일의 점수와 그 뒤 오늘까지의 실제 수익률을 비교한다."""
+    from . import verify as vf
+    st = db.settings()
+    prof = st["profile"] if st["profile"] in PROFILES else "C"
+    raw = (request.args.get("date") or "").replace("-", "")
+    date = raw if len(raw) == 8 and raw.isdigit() else vf.default_date(prof)
+    today = datetime.now().strftime("%Y%m%d")
+    bad_date = date >= today
+    scan = None if bad_date else db.bt_scan(date)
+    last = db.latest_scan(done_only=False, kind="bt")
+    fail = last if last and last["status"] == "failed" and last.get("req_date") == date and \
+        (not scan or last["id"] > scan["id"]) else None
+    ctx = {"date": date, "default_date": vf.default_date(prof), "offset_label": vf.OFFSET_LABEL[prof], "prof": prof,
+           "scan": scan, "fail": fail, "bad_date": bad_date, "has_data": scanner.bt_has_data(date) if not bad_date else None,
+           "history": db.bt_scans()[:30], "rows_json": "[]", "hold_rows": [], "env": {}, "warnings": [],
+           "counts": {}, "grades": {}, "allr": None, "tops": [], "idx": {}, "eval_date": None,
+           "live": db.latest_scan(), "changed": False}
+    if not scan:
+        return render_template("verify.html", **ctx)
+    rows = db.scores(scan["id"])
+    after, eval_date = vf.after_stats(scan["base_date"], scan["demo"])
+    idx = vf.index_returns(scan["base_date"], eval_date, scan["demo"])
+    live = ctx["live"]
+    now_map = {r["ticker"]: r for r in db.scores(live["id"])} if live else {}
+    holds = {h["ticker"]: h for h in db.holdings()}
+    slim = []
+    for r in rows:
+        ret, mx, mn = vf.ret_of(r, after.get(r["ticker"]))
+        nw = now_map.get(r["ticker"])
+        im = idx.get(r["market"])
+        slim.append({
+            "t": r["ticker"], "n": r["name"], "m": r["market"], "sec": r["sector"], "c": r["close"],
+            "last": (after.get(r["ticker"]) or {}).get("last"), "ret": ret, "mx": mx, "mn": mn,
+            "ex": None if ret is None or not im else ret - im["ret"],
+            "f": r["final"], "g": r["grade"], "s": r["s_short"], "mi": r["s_mid"], "l": r["s_long"], "cov": r["coverage"],
+            "nf": nw["final"] if nw else None, "ng": nw["grade"] if nw else None,
+            "df": (nw["final"] - r["final"]) if nw else None, "h": r["ticker"] in holds, "ko": r["knockout"],
+        })
+    grades, allr, tops = vf.summarize(slim)
+    smap = {x["t"]: x for x in slim}
+    hold_rows = []
+    for tk, h in holds.items():
+        x = smap.get(tk)
+        hold_rows.append({"h": h, "x": x})
+    meta = json.loads(scan["env"] or "{}")
+    changed_at = db.raw_setting("scoring_changed_at")
+    ctx.update(rows_json=json.dumps(slim, ensure_ascii=False), hold_rows=hold_rows, env=meta.get("env", {}),
+               warnings=json.loads(scan["warnings"] or "[]"), counts={g: grades[g]["n"] for g in grades},
+               grades=grades, allr=allr, tops=tops, idx=idx, eval_date=eval_date,
+               changed=bool(changed_at and changed_at > (scan.get("finished_at") or "")))
+    for hr in hold_rows:
+        x = hr["x"]
+        hr["notes"] = []
+        if x:
+            if x["df"] is not None:
+                hr["notes"].append(f"점수 {x['df']:+.1f}")
+            if x["ng"] and x["ng"] != x["g"]:
+                hr["notes"].append(f"등급 {GRADE_INFO[x['g']][0]} → {GRADE_INFO[x['ng']][0]}")
+            if x["mn"] is not None and x["mn"] <= -15:
+                hr["notes"].append(f"기간 중 최대 {x['mn']:.1f}% 하락")
+    return render_template("verify.html", **ctx)
+
+
+@app.post("/api/verify")
+def api_verify():
+    j = request.get_json(silent=True) or {}
+    date = str(j.get("date") or "").replace("-", "")
+    if len(date) != 8 or not date.isdigit() or date >= datetime.now().strftime("%Y%m%d"):
+        return jsonify(ok=False, message="오늘 이전의 기준일을 고르세요.")
+    mode = "calc" if j.get("mode") == "calc" else "fetch"
+    if mode == "calc" and not scanner.bt_has_data(date):
+        return jsonify(ok=False, message="이 기준일의 저장 데이터가 없습니다. '지금 스캔'으로 먼저 데이터를 받으세요.")
+    started = scanner.run_backtest_async(date, mode)
+    if not started:
+        return jsonify(ok=False, message="이미 스캔이 진행 중입니다.")
+    return jsonify(ok=True, message="검증 계산을 시작했습니다." if mode == "calc" else
+                   "기준일 데이터를 받아 검증을 시작했습니다. 처음 받는 기간이면 오래 걸릴 수 있습니다.")
 
 
 @app.route("/manage")
@@ -315,7 +422,7 @@ def api_export():
 
 @app.get("/api/scan/status")
 def api_scan_status():
-    s = db.latest_scan(done_only=False)
+    s = db.latest_scan(done_only=False, kind=None)
     return jsonify(running=scanner.is_running(), scan=s and {k: s[k] for k in ("id", "status", "message", "base_date", "started_at")})
 
 

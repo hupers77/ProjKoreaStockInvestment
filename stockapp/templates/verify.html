@@ -1,0 +1,245 @@
+{% extends "base.html" %}
+{% block title %}투자검증{% endblock %}
+{% block body %}
+{% set pct = '%+.1f%%' %}
+<div class="card">
+  <div class="row" style="align-items:center;gap:10px">
+    <div style="flex:1 1 360px">
+      <form method="get" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <b>검증 기준일</b>
+        <input type="date" name="date" value="{{ date|d8 }}" max="{{ now.strftime('%Y-%m-%d') }}" onchange="this.form.submit()">
+        <a class="small" href="{{ url_for('verify', date=default_date) }}">기본값 ({{ profiles[prof].name.split(' (')[0] }} · {{ offset_label }})</a>
+      </form>
+      {% if scan %}
+      <div style="margin-top:6px">
+        실제 기준일 <b>{{ scan.base_date|d8 }}</b> → 평가일 <b>{{ eval_date|d8 if eval_date else '-' }}</b>
+        <span class="muted">· {{ profiles[scan.profile].name }} · {{ scan.n_scored|num }}종목 · 계산 {{ scan.finished_at }}</span>
+        {% if scan.demo %}<span class="badge g-B">데모 데이터</span>{% endif %}
+      </div>
+      {% endif %}
+      <div class="small muted" style="margin-top:4px">기준일 시점의 데이터에 <b>현재</b> 프로파일·평가 기준·가중치를 적용해 채점하고, 그 뒤 평가일까지의 실제 주가로 결과를 봅니다.</div>
+      {% if history %}<div class="small" style="margin-top:6px">계산된 기준일:
+        {% for h in history %}<a href="{{ url_for('verify', date=h.base_date) }}" class="badge {{ 'g-A' if scan and h.id == scan.id else '' }}" style="margin-right:4px;border:1px solid var(--line)">{{ h.base_date[2:4] }}/{{ h.base_date[4:6] }}/{{ h.base_date[6:] }}</a>{% endfor %}</div>{% endif %}
+      <div class="small muted" id="scan-status"></div>
+    </div>
+    <button class="btn green" onclick="startVerify('calc')" {{ 'disabled' if running or not has_data or bad_date }}
+      title="{{ '받아 둔 기준일 데이터로 현재 기준에 맞춰 다시 계산' if has_data else '이 기준일 데이터가 없습니다. 지금 스캔을 먼저 하세요' }}">검증 계산</button>
+    <button class="btn primary" onclick="startVerify('fetch')" {{ 'disabled' if running or bad_date }}
+      title="기준일 1년 전부터의 데이터와 기준일 이후 시세를 받아 계산">지금 스캔</button>
+  </div>
+  {% if bad_date %}<div class="err" style="margin-top:10px">오늘 이전의 날짜를 고르세요.</div>{% endif %}
+  {% if fail %}<div class="err scan-msg" style="margin-top:10px">최근 검증 실패: {{ fail.message }}</div>{% endif %}
+  {% if changed %}<div class="small scan-msg" style="margin-top:8px;color:#1f7a45;font-weight:600">평가 기준·설정이 이 계산 뒤에 바뀌었습니다. ‘검증 계산’을 누르면 데이터를 다시 받지 않고 새 기준으로 계산합니다.</div>{% endif %}
+  {% for w in warnings %}<div class="warn small scan-msg" style="margin:8px 0 0">{{ w }}</div>{% endfor %}
+</div>
+
+{% if not scan %}
+<div class="card">
+  {% if not bad_date %}
+  <p><b>{{ date|d8 }} 기준 검증 결과가 아직 없습니다.</b></p>
+  <p class="small muted">{% if has_data %}이 기준일 데이터는 받아 두었습니다. ‘검증 계산’을 누르면 바로 계산합니다.{% else %}‘지금 스캔’을 누르면 기준일 1년 전부터의 시세·수급·재무와 기준일 이후 오늘까지의 시세를 받아 계산합니다. 처음 받는 기간이면 정기 스캔처럼 오래 걸릴 수 있습니다.{% endif %}</p>
+  {% endif %}
+</div>
+{% else %}
+
+<div class="stats" style="margin-bottom:14px">
+  {% for g in ['S','A','B','C','X'] %}{% set x = grades[g] %}
+  <div class="stat g-{{g}}" style="text-decoration:none;cursor:pointer" title="순위표를 이 등급으로 보기" onclick="pickGrade('{{g}}')">
+    <div class="v">{{ x.n }}<span style="font-size:14px;font-weight:600;margin-left:8px">{{ pct|format(x.avg) if x.avg is not none else '' }}</span></div>
+    <div class="k">{{ grade_info[g][0] }} · {{ grade_info[g][1] }}{% if x.win is not none %} · 상승 {{ x.win|num }}%{% endif %}</div></div>
+  {% endfor %}
+</div>
+
+<div class="row">
+  <div class="card">
+    <h2>점수 상위 종목의 성과</h2>
+    <div class="tablewrap"><table>
+      <tr><th class="l">대상</th><th>종목 수</th><th>평균 수익률</th><th>중앙값</th><th>상승 비율</th><th>전체 평균 대비</th></tr>
+      {% for n, x in tops %}
+      <tr><td class="l">점수 상위 {{ n }}</td><td>{{ x.n }}</td>
+        <td class="{{ 'up' if x.avg>0 else 'down' if x.avg<0 }}"><b>{{ pct|format(x.avg) }}</b></td><td>{{ pct|format(x.med) }}</td><td>{{ x.win|num }}%</td>
+        <td class="{{ 'up' if x.avg>allr.avg else 'down' }}">{{ '%+.1f%%p'|format(x.avg - allr.avg) }}</td></tr>
+      {% endfor %}
+      {% if allr and allr.n %}<tr><td class="l">채점 종목 전체</td><td>{{ allr.n }}</td><td class="{{ 'up' if allr.avg>0 else 'down' if allr.avg<0 }}">{{ pct|format(allr.avg) }}</td><td>{{ pct|format(allr.med) }}</td><td>{{ allr.win|num }}%</td><td>-</td></tr>{% endif %}
+      {% for mk, x in idx.items() %}<tr><td class="l">{{ mk }} 지수</td><td>-</td><td class="{{ 'up' if x.ret>0 else 'down' if x.ret<0 }}">{{ pct|format(x.ret) }}</td><td>-</td><td>-</td>
+        <td>{{ '%+.1f%%p'|format(x.ret - allr.avg) if allr and allr.avg is not none else '-' }}</td></tr>{% endfor %}
+    </table></div>
+    <p class="small muted">수익률 = 기준일 종가 → 평가일 종가, 배당·수수료 제외. 같은 기준·가중치로 점수가 높을수록 수익률이 높으면 현재 평가 기준이 그 시기에 잘 맞았다는 뜻입니다.</p>
+  </div>
+  {% for mk, e in env.items() %}
+  <div class="card">
+    {% set lv = 'good' if e.score>=7.5 else 'fair' if e.score>=5 else 'weak' if e.score>=2.5 else 'bad' %}
+    <h2><span class="env-icon" title="{{ {'good':'좋음','fair':'보통','weak':'주의','bad':'나쁨'}[lv] }}">{{ {'good':'🌞','fair':'🌤️','weak':'☁️','bad':'🌧️'}[lv] }}</span> {{ mk }} 시장 환경 <span class="muted small">(기준일)</span></h2>
+    {% set ed = e.date or scan.base_date %}
+    <div class="small">조회일 {{ ed[2:4] }}/{{ ed[4:6] }}/{{ ed[6:8] }} · 지수 {{ e.index|num(2) }} · 20일 {{ e.r20|num(1) }}%</div>
+    <ul class="small" style="margin:6px 0 0;padding-left:18px">{% for c in e.conds %}<li>{{ c }}</li>{% endfor %}</ul>
+    {% if idx[mk] %}<div class="small" style="margin-top:6px">이후 지수 {{ idx[mk].base|num(2) }} → {{ idx[mk].last|num(2) }} (<b class="{{ 'up' if idx[mk].ret>0 else 'down' }}">{{ pct|format(idx[mk].ret) }}</b>)</div>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <h2>보유 종목 ({{ hold_rows|length }}) <span class="muted small">· 기준일 점수와 오늘 점수·수익률 비교</span></h2>
+  {% if not hold_rows %}<p class="muted small">표에서 종목명 왼쪽 라디오 버튼을 누르면 보유 종목으로 등록되고 여기서 비교됩니다.</p>{% else %}
+  <div class="tablewrap"><table>
+    <tr><th class="l">보유</th><th class="l">종목</th><th>기준일 등급·점수</th><th>오늘 등급·점수</th><th>점수 변화</th>
+        <th>기준일 종가</th><th>현재가</th><th>수익률</th><th>시장 대비</th><th>최대 상승</th><th>최대 하락</th><th class="l">점검</th></tr>
+    {% for hr in hold_rows %}{% set x = hr.x %}
+    <tr>
+      <td class="l"><input type="radio" class="hold" data-t="{{ hr.h.ticker }}" data-n="{{ hr.h.name }}" checked></td>
+      <td class="l">{% if x %}<a href="{{ url_for('stock', ticker=hr.h.ticker, scan=scan.id) }}"><span class="name g-{{ x.g }}">{{ hr.h.name or hr.h.ticker }}</span></a>{% else %}{{ hr.h.name or hr.h.ticker }}{% endif %} <span class="muted small">{{ hr.h.ticker }}</span></td>
+      {% if x %}
+      <td><span class="badge g-{{ x.g }}">{{ grade_info[x.g][0] }}</span> <b>{{ x.f|num(1) }}</b></td>
+      <td>{% if x.ng %}<span class="badge g-{{ x.ng }}">{{ grade_info[x.ng][0] }}</span> <b>{{ x.nf|num(1) }}</b>{% else %}-{% endif %}</td>
+      <td class="{{ 'up' if x.df and x.df>0 else 'down' if x.df and x.df<0 }}">{{ '%+.1f'|format(x.df) if x.df is not none else '-' }}</td>
+      <td>{{ x.c|num }}</td><td>{{ x.last|num }}</td>
+      <td class="{{ 'up' if x.ret and x.ret>0 else 'down' if x.ret and x.ret<0 }}"><b>{{ pct|format(x.ret) if x.ret is not none else '-' }}</b></td>
+      <td class="{{ 'up' if x.ex and x.ex>0 else 'down' if x.ex and x.ex<0 }}">{{ '%+.1f%%p'|format(x.ex) if x.ex is not none else '-' }}</td>
+      <td class="up">{{ pct|format(x.mx) if x.mx is not none else '-' }}</td><td class="down">{{ pct|format(x.mn) if x.mn is not none else '-' }}</td>
+      <td class="l small">{{ hr.notes|join(' · ') if hr.notes else '' }}</td>
+      {% else %}<td colspan="10" class="l muted">기준일에 채점되지 않은 종목 (그 뒤 상장했거나 제외 목록·거래 부족)</td>{% endif %}
+    </tr>
+    {% endfor %}
+  </table></div>{% endif %}
+</div>
+
+<div class="card" id="ranking">
+  <h2>기준일 종목 순위와 이후 결과 <button class="btn small" style="margin-left:8px" onclick="resetFilters()">조건 초기화</button></h2>
+  <div class="legend" style="margin-bottom:8px">종목명 배경색 = 기준일 등급:
+    {% for g in ['S','A','B','C','X'] %}<span class="name g-{{g}}">{{ grade_info[g][0] }} {{ grade_info[g][2] }}</span>{% endfor %}
+    <span class="muted">· 종목을 누르면 기준일 시점의 상세 화면</span>
+  </div>
+  <div class="filters">
+    <input type="text" id="q" placeholder="종목명·코드 검색" oninput="render(1)">
+    <select id="fg" onchange="render(1)"><option value="">전체 등급</option><option value="SA">S+A</option><option value="SAB">S+A+B</option>
+      {% for g in ['S','A','B','C','X'] %}<option value="{{g}}">{{ grade_info[g][0] }}</option>{% endfor %}</select>
+    <select id="fm" onchange="render(1)"><option value="">전체 시장</option><option>KOSPI</option><option>KOSDAQ</option></select>
+    <select id="fs" onchange="render(1)"><option value="">전체 업종</option></select>
+    <label class="small"><input type="checkbox" id="fh" onchange="render(1)"> 보유만</label>
+    <span class="muted small" id="cnt"></span>
+  </div>
+  <div class="tablewrap"><table id="tbl">
+    <thead><tr>
+      <th class="l" data-k="h">보유</th><th class="l" data-k="n">종목</th><th class="l" data-k="sec">업종</th><th data-k="g">등급</th>
+      <th data-k="f">점수 ▼</th><th data-k="s">단기</th><th data-k="mi">중기</th><th data-k="l">장기</th>
+      <th data-k="c">기준일 종가</th><th data-k="last">현재가</th><th data-k="ret">수익률</th><th data-k="ex">시장 대비</th>
+      <th data-k="mx">최대 상승</th><th data-k="mn">최대 하락</th><th data-k="nf">오늘 점수</th><th data-k="df">점수 변화</th>
+    </tr></thead><tbody></tbody>
+  </table></div>
+  <div class="pager"><button class="btn" onclick="render(page-1)">이전</button><span id="pg"></span><button class="btn" onclick="render(page+1)">다음</button></div>
+</div>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+async function startVerify(mode) {
+  const j = await postJSON('/api/verify', {date: '{{ date }}', mode});
+  if (j.ok) {
+    document.querySelectorAll('.scan-msg').forEach(x => x.remove());
+    const st = document.getElementById('scan-status'); if (st) st.textContent = '';
+  }
+  alert(j.message);
+  if (j.ok) pollScan();
+}
+{% if scan %}
+const ROWS = {{ rows_json|safe }};
+const SCAN = {{ scan.id }};
+const GL = {S:'S', A:'A', B:'B', C:'C', X:'제외'};
+const GORD = {S:5, A:4, B:3, C:2, X:1};
+let page = 1, sortK = 'f', sortDir = -1;
+const PER = 100;
+const secs = [...new Set(ROWS.map(r => r.sec).filter(Boolean))].sort();
+const fs = document.getElementById('fs');
+secs.forEach(s => { const o = document.createElement('option'); o.textContent = s; fs.appendChild(o); });
+const fmt = (x, d=0) => x == null ? '-' : Number(x).toLocaleString('ko-KR', {minimumFractionDigits: d, maximumFractionDigits: d});
+const sgn = (x, d=1, u='%') => x == null ? '-' : (x > 0 ? '+' : '') + fmt(x, d) + u;
+const cls = x => x > 0 ? 'up' : x < 0 ? 'down' : '';
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+document.querySelectorAll('#tbl th[data-k]').forEach(th => th.onclick = () => {
+  const k = th.dataset.k; sortDir = (sortK === k) ? -sortDir : -1; sortK = k;
+  document.querySelectorAll('#tbl th[data-k]').forEach(x => x.textContent = x.textContent.replace(/ [▲▼]$/, ''));
+  th.textContent += sortDir < 0 ? ' ▼' : ' ▲'; render(1);
+});
+// 검색 조건은 대시보드와 따로 저장해 다른 페이지에 다녀와도 유지한다
+const FKEY = 'verifyFilters.v1';
+function saveFilters() {
+  try {
+    localStorage.setItem(FKEY, JSON.stringify({q: document.getElementById('q').value, g: document.getElementById('fg').value,
+      m: document.getElementById('fm').value, s: fs.value, h: document.getElementById('fh').checked, sortK, sortDir, page}));
+  } catch (e) {}
+}
+function loadFilters() {
+  let f = null;
+  try { f = JSON.parse(localStorage.getItem(FKEY) || 'null'); } catch (e) {}
+  if (!f) return 1;
+  document.getElementById('q').value = f.q || '';
+  document.getElementById('fg').value = f.g || '';
+  document.getElementById('fm').value = f.m || '';
+  if (f.s && secs.includes(f.s)) fs.value = f.s;
+  document.getElementById('fh').checked = !!f.h;
+  if (f.sortK) { sortK = f.sortK; sortDir = f.sortDir || -1; }
+  document.querySelectorAll('#tbl th[data-k]').forEach(x => {
+    x.textContent = x.textContent.replace(/ [▲▼]$/, '');
+    if (x.dataset.k === sortK) x.textContent += sortDir < 0 ? ' ▼' : ' ▲';
+  });
+  return f.page || 1;
+}
+function resetFilters() {
+  ['q', 'fm'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('fg').value = ''; fs.value = ''; document.getElementById('fh').checked = false;
+  sortK = 'f'; sortDir = -1;
+  document.querySelectorAll('#tbl th[data-k]').forEach(x => {
+    x.textContent = x.textContent.replace(/ [▲▼]$/, '') + (x.dataset.k === 'f' ? ' ▼' : '');
+  });
+  render(1);
+}
+function pickGrade(g) {
+  document.getElementById('fg').value = g;
+  render(1);
+  document.getElementById('ranking').scrollIntoView({behavior: 'smooth'});
+}
+function filtered() {
+  const q = document.getElementById('q').value.trim().toLowerCase();
+  const g = document.getElementById('fg').value, m = document.getElementById('fm').value, s = fs.value;
+  const h = document.getElementById('fh').checked;
+  return ROWS.filter(r => (!q || r.n.toLowerCase().includes(q) || r.t.includes(q)) && (!g || g.includes(r.g))
+    && (!m || r.m === m) && (!s || r.sec === s) && (!h || r.h));
+}
+function render(p) {
+  let rows = filtered();
+  const key = r => sortK === 'g' ? GORD[r.g] : (sortK === 'h' ? (r.h ? 1 : 0) : r[sortK]);
+  rows.sort((a, b) => {
+    let x = key(a), y = key(b);
+    if (x == null) return 1; if (y == null) return -1;
+    if (typeof x === 'string') return sortDir * x.localeCompare(y);
+    return sortDir * (x - y);
+  });
+  const pages = Math.max(1, Math.ceil(rows.length / PER));
+  page = Math.min(Math.max(1, p || 1), pages);
+  saveFilters();
+  const rs = rows.map(r => r.ret).filter(x => x != null);
+  const avg = rs.length ? rs.reduce((a, b) => a + b, 0) / rs.length : null;
+  document.getElementById('cnt').innerHTML = rows.length.toLocaleString() + '종목' +
+    (avg == null ? '' : ' · 평균 수익률 <b class="' + cls(avg) + '">' + sgn(avg) + '</b> · 상승 ' + fmt(rs.filter(x => x > 0).length / rs.length * 100) + '%');
+  document.getElementById('pg').textContent = page + ' / ' + pages;
+  document.querySelector('#tbl tbody').innerHTML = rows.slice((page-1)*PER, page*PER).map(r => `
+    <tr>
+      <td class="l"><input type="radio" class="hold" data-t="${r.t}" data-n="${esc(r.n)}" ${r.h ? 'checked' : ''}></td>
+      <td class="l"><a href="/stock/${r.t}?scan=${SCAN}"><span class="name g-${r.g}">${esc(r.n)}</span></a> <span class="muted small">${r.t} · ${r.m}</span></td>
+      <td class="l small">${esc(r.sec || '')}</td>
+      <td><span class="badge g-${r.g}" style="text-decoration:none">${GL[r.g]}</span></td>
+      <td><b>${fmt(r.f, 1)}</b></td>
+      <td>${fmt(r.s, 1)}</td><td>${fmt(r.mi, 1)}</td><td>${fmt(r.l, 1)}</td>
+      <td>${fmt(r.c)}</td><td>${fmt(r.last)}</td>
+      <td class="${cls(r.ret)}"><b>${sgn(r.ret)}</b></td><td class="${cls(r.ex)}">${sgn(r.ex, 1, '%p')}</td>
+      <td class="up">${sgn(r.mx)}</td><td class="down">${sgn(r.mn)}</td>
+      <td>${r.ng ? '<span class="badge g-' + r.ng + '">' + GL[r.ng] + '</span> ' : ''}${fmt(r.nf, 1)}</td>
+      <td class="${cls(r.df)}">${sgn(r.df, 1, '')}</td>
+    </tr>`).join('');
+}
+window.onHoldChanged = (t, held) => { ROWS.forEach(r => { if (r.t === t) r.h = held; }); };
+render(loadFilters());
+{% endif %}
+{% if running %}pollScan();{% endif %}
+</script>
+{% endblock %}

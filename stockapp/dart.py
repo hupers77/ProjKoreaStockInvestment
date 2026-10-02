@@ -100,7 +100,8 @@ def _report_final(year, q, today):
     return today > due
 
 
-def collect(key, tickers, base_date, log=print):
+def collect(key, tickers, base_date, log=print, strict=False):
+    """strict(투자검증)면 기준일에 실제로 공시돼 있었을 보고서만 쓴다 (분기 45일, 사업보고서 90일 제출 기한)."""
     today = datetime.strptime(base_date, "%Y%m%d")
     codes = corp_codes(key)
     corp_list = sorted({codes[t] for t in tickers if t in codes})
@@ -112,7 +113,7 @@ def collect(key, tickers, base_date, log=print):
     for y, rc, q in plan:
         # 분기 종료 후 45일 전이면 아직 제출 전
         end = datetime(y, {1: 3, 2: 6, 3: 9, 4: 12}[q], 28)
-        if today < end + timedelta(days=40):
+        if today < end + timedelta(days=(90 if q == 4 else 47) if strict else 40):
             continue
         ck = f"dart:{y}:{rc}"
         cached, at = db.cache_get(ck)

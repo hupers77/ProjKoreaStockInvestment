@@ -17,7 +17,7 @@
   {% for s in rows %}
   <tr><td>{{ s.id }}</td><td class="l small">{{ s.started_at }}</td><td class="l small">{{ s.finished_at or '' }}</td>
     <td class="l">{{ s.base_date|d8 }}{% if s.demo %} <span class="badge g-B">데모</span>{% endif %}</td><td class="l">{{ s.profile }}</td>
-    <td class="l small">{{ {'schedule':'자동','recalc':'재계산'}.get(s.trigger, '수동') }}</td>
+    <td class="l small">{{ {'schedule':'자동','recalc':'재계산','bt-fetch':'검증 스캔','bt-calc':'검증 계산'}.get(s.trigger, '수동') }}</td>
     <td class="l"><span class="{{ 'alert' if s.status=='failed' }}">{{ {'done':'완료','failed':'실패','running':'진행 중'}.get(s.status, s.status) }}</span></td>
     <td>{{ s.n_scored|num if s.n_scored else '' }}</td>
     <td class="basis">{{ s.message }}{% for w in s.warn_list %}<div class="muted">· {{ w }}</div>{% endfor %}</td></tr>

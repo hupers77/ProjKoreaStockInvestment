@@ -8,7 +8,13 @@
       <a href="{{ url_for('dashboard') }}" onclick="return goBack()" title="이전 화면으로 돌아가기" class="name g-{{ r.grade }}" style="font-size:18px;color:inherit;text-decoration:none">{{ r.name }}</a>
       <span class="muted">{{ r.ticker }} · {{ r.market }} · {{ r.sector }}</span>
       {% if excluded %}<span class="badge g-X">제외 목록</span>{% endif %}
-      <div class="small muted" style="margin-top:6px">평가 기준일 {{ scan.base_date|d8 }} · {{ prof.name }} · 현재가 {{ r.close|num }}원 ({{ '%+.2f'|format(r.chg) }}%) · 시총 {{ ((r.mcap or 0)/1e8)|num }}억</div>
+      <div class="small muted" style="margin-top:6px">평가 기준일
+        <select onchange="location.href='{{ url_for('stock', ticker=r.ticker) }}' + (this.value ? '?scan=' + this.value : '')" style="padding:2px 4px">
+          {% for o in options %}<option value="{{ o.id if o.kind == 'bt' or o.id != options_live_id else '' }}" {{ 'selected' if o.id == scan.id }}>{{ o.base_date|d8 }}{{ ' · 투자검증' if o.kind == 'bt' else '' }}</option>{% endfor %}
+          {% if not options %}<option selected>{{ scan.base_date|d8 }}</option>{% endif %}
+        </select>
+        {% if bt %}<span class="badge g-B">투자검증</span>{% endif %}
+        · {{ prof.name }} · {{ '기준일 종가' if bt else '현재가' }} {{ r.close|num }}원 ({{ '%+.2f'|format(r.chg) }}%) · 시총 {{ ((r.mcap or 0)/1e8)|num }}억</div>
     </div>
     <div style="text-align:right">
       <div class="score-big">{{ r.final|num(1) }}</div>
@@ -33,6 +39,21 @@
     <div class="small">기본 종합 {{ r.base|num(1) }} · 가점 +{{ r.bonus|num }} · 감점 {{ r.penalty|num }} → 최종 {{ r.final|num(1) }}</div>
     {% for a in d.adj %}<div class="small muted">{{ a[0] }} {{ a[1] }} ({{ '%+d'|format(a[2]) }}, {{ a[3] }})</div>{% endfor %}
   </div>
+  {% if bt %}
+  <div class="card">
+    <h2>검증 결과 <span class="muted small">{{ scan.base_date|d8 }} → {{ res.eval_date|d8 if res.eval_date else '-' }}</span></h2>
+    <div class="kv small">
+      <span class="muted">기준일 종가 → 현재가</span><b>{{ r.close|num }}원 → {{ res.last|num }}원</b>
+      <span class="muted">수익률</span><b class="{{ 'up' if res.ret and res.ret>0 else 'down' if res.ret and res.ret<0 }}">{{ '%+.1f%%'|format(res.ret) if res.ret is not none else '-' }}</b>
+      <span class="muted">같은 기간 {{ r.market }} 지수</span><b>{{ '%+.1f%%'|format(res.idx.ret) if res.idx else '-' }}{% if res.ex is not none %} <span class="{{ 'up' if res.ex>0 else 'down' }}">(시장 대비 {{ '%+.1f%%p'|format(res.ex) }})</span>{% endif %}</b>
+      <span class="muted">기간 중 최대 상승 / 최대 하락</span><b><span class="up">{{ '%+.1f%%'|format(res.mx) if res.mx is not none else '-' }}</span> / <span class="down">{{ '%+.1f%%'|format(res.mn) if res.mn is not none else '-' }}</span></b>
+      <span class="muted">기준일 점수 → 오늘 점수</span><b>{{ r.final|num(1) }} ({{ grade_info[r.grade][0] }}) → {% if res.now %}{{ res.now.final|num(1) }} ({{ grade_info[res.now.grade][0] }}) <span class="{{ 'up' if res.now.final>r.final else 'down' }}">{{ '%+.1f'|format(res.now.final - r.final) }}</span>{% else %}오늘 점수 없음{% endif %}</b>
+      {% if res.now %}<span class="muted">관점별 변화 (단기·중기·장기)</span><b>{% for k in ['s_short','s_mid','s_long'] %}{{ '%+.1f'|format((res.now[k] or 0) - (r[k] or 0)) }}{{ ' · ' if not loop.last }}{% endfor %}</b>{% endif %}
+      {% if holding %}<span class="muted">보유</span><b>보유 중{% if holding.buy_price %} · 매수가 {{ holding.buy_price|num }}원{% endif %}</b>{% endif %}
+    </div>
+    <p class="small muted" style="margin-top:8px">기준일 시점의 데이터에 현재 평가 기준을 적용한 점수입니다. 수익률은 배당·수수료를 뺀 종가 기준입니다.</p>
+  </div>
+  {% else %}
   <div class="card">
     <h2>대응 가격 (S19 기준)</h2>
     <div class="kv small">
@@ -42,22 +63,24 @@
       {% if holding %}<span class="muted">매수가 / 수익률</span><b>{{ holding.buy_price|num }}원 {% if holding.buy_price %}({{ '%+.1f'|format((r.close/holding.buy_price-1)*100) }}%){% endif %}</b>{% endif %}
     </div>
   </div>
+  {% endif %}
 </div>
 
 <div class="row">
-  <div class="card" style="flex:2 1 500px"><h2>주가 (이동평균 20·60·120)</h2>
+  <div class="card" style="flex:2 1 500px"><h2>주가 (이동평균 20·60·120){% if bt %} <span class="muted small">· 기준일까지, 이후 실제 흐름은 회색 점선</span>{% endif %}</h2>
     {% if px_json == "[]" %}<p class="muted small">저장된 시세가 없습니다.</p>{% else %}<canvas id="px" height="110"></canvas>{% endif %}</div>
-  <div class="card" style="flex:1 1 300px"><h2>점수 추이</h2><canvas id="hist" height="160"></canvas></div>
+  <div class="card" style="flex:1 1 300px"><h2>점수 추이{% if bt %} <span class="muted small">· 기준일까지</span>{% endif %}</h2><canvas id="hist" height="160"></canvas></div>
 </div>
 
 <div class="card">
   <h2>항목별 평가</h2>
+  {% if bt %}<p class="small muted">투자검증 화면입니다. 수동 점수는 현재 화면(최신 평가 기준일)에서 입력하세요. 입력한 수동 점수는 ‘검증 계산’에도 적용됩니다.</p>{% else %}
   <p class="small muted">자동 점수를 바꾸거나 N/A 항목(해자·지배구조·컨센서스 등)을 직접 채우려면 ‘수동’ 칸에 0~10점을 넣고 저장하세요. 수동 점수는 자동 점수보다 우선하며 다음 스캔에도 계속 적용됩니다.
-    {% if not can_rescore %}<br><b>서버가 재시작되어 즉시 재계산은 안 되고, 다음 스캔에 반영됩니다.</b>{% endif %}</p>
+    {% if not can_rescore %}<br><b>서버가 재시작되어 즉시 재계산은 안 되고, 다음 스캔에 반영됩니다.</b>{% endif %}</p>{% endif %}
   {% for p, items in groups.items() %}
   <h3 style="font-size:14px;margin:16px 0 6px">{{ p }} 평가 <span class="muted small">· {{ d.persp[p]|num(1) }}점</span></h3>
   <div class="tablewrap"><table>
-    <tr><th class="l">ID</th><th class="l">평가 항목</th><th>가중치</th><th>점수</th><th>가중점수</th><th class="l">데이터값</th><th class="l">평가 근거</th><th class="l">수동(0~10)</th><th class="l">메모</th></tr>
+    <tr><th class="l">ID</th><th class="l">평가 항목</th><th>가중치</th><th>점수</th><th>가중점수</th><th class="l">데이터값</th><th class="l">평가 근거</th>{% if not bt %}<th class="l">수동(0~10)</th><th class="l">메모</th>{% endif %}</tr>
     {% for it in items %}{% set v = d['items'][it.id] %}{% set m = manual.get(it.id) %}{% set w = (d.weights or {}).get(it.id, it.weight) %}
     <tr>
       <td class="l">{{ it.id }}{{ ' ★' if it.core }}</td>
@@ -67,19 +90,23 @@
       <td>{{ (v[0]*w/10)|num(1) if v[0] is not none else '-' }}</td>
       <td class="val">{{ v[1] }}</td>
       <td class="basis">{{ v[2] }}</td>
-      <td class="l"><input type="number" min="0" max="10" step="1" style="width:64px" data-item="{{ it.id }}" class="mscore" value="{{ m.score|int if m else '' }}"></td>
-      <td class="l"><input type="text" style="width:200px" data-item="{{ it.id }}" class="mnote" value="{{ m.note if m else '' }}" placeholder="근거·출처"></td>
+      {% if not bt %}<td class="l"><input type="number" min="0" max="10" step="1" style="width:64px" data-item="{{ it.id }}" class="mscore" value="{{ m.score|int if m else '' }}"></td>
+      <td class="l"><input type="text" style="width:200px" data-item="{{ it.id }}" class="mnote" value="{{ m.note if m else '' }}" placeholder="근거·출처"></td>{% endif %}
     </tr>
     {% endfor %}
   </table></div>
   {% endfor %}
 
+  {% if not bt %}
   <h3 style="font-size:14px;margin:16px 0 6px">가점·감점 (해당하면 체크)</h3>
   <div class="row small">
     <div>{% for k, v in penalties.items() %}<label style="display:block"><input type="checkbox" class="madj" data-item="{{ k }}" {{ 'checked' if manual.get(k) and manual[k].score }}> {{ k }} {{ v[0] }} ({{ v[1] }})</label>{% endfor %}</div>
     <div>{% for k, v in bonuses.items() %}<label style="display:block"><input type="checkbox" class="madj" data-item="{{ k }}" {{ 'checked' if manual.get(k) and manual[k].score }}> {{ k }} {{ v[0] }} (+{{ v[1] }})</label>{% endfor %}</div>
   </div>
   <div style="margin-top:12px"><button class="btn primary" onclick="saveManual()">수동 입력 저장</button> <a class="btn" href="{{ url_for('dashboard') }}" onclick="return goBack()">돌아가기</a> <span id="msave" class="small muted"></span></div>
+  {% else %}
+  <div style="margin-top:12px"><a class="btn" href="{{ url_for('verify', date=scan.req_date or scan.base_date) }}" onclick="return goBack()">돌아가기</a></div>
+  {% endif %}
 </div>
 
 <div class="card small muted">
@@ -93,15 +120,18 @@ function goBack() {
   if (history.length > 1 && document.referrer && new URL(document.referrer).origin === location.origin) { history.back(); return false; }
   return true;  // 이전 화면이 없으면 링크대로 대시보드로 이동
 }
-const PX = {{ px_json|safe }}, HIST = {{ hist_json|safe }};
-const TARGET = {{ r.target or 'null' }}, STOP = {{ r.stop or 'null' }};
+const PX = {{ px_json|safe }}, HIST = {{ hist_json|safe }}, AFTER = {{ after_json|safe }};
+const TARGET = {{ 'null' if bt else (r.target or 'null') }}, STOP = {{ 'null' if bt else (r.stop or 'null') }};
 function ma(arr, n) { return arr.map((_, i) => i < n - 1 ? null : arr.slice(i - n + 1, i + 1).reduce((a, b) => a + b, 0) / n); }
 if (PX.length && window.Chart) {
-  const c = PX.map(x => x.close), lab = PX.map(x => x.date.slice(2));
-  const ds = [{label: '종가', data: c, borderColor: '#1d232b', borderWidth: 1.5, pointRadius: 0},
-    {label: '20일', data: ma(c, 20), borderColor: '#e07b00', borderWidth: 1, pointRadius: 0},
-    {label: '60일', data: ma(c, 60), borderColor: '#2457c5', borderWidth: 1, pointRadius: 0},
-    {label: '120일', data: ma(c, 120), borderColor: '#7a3ec8', borderWidth: 1, pointRadius: 0}];
+  const c = PX.map(x => x.close), lab = PX.map(x => x.date.slice(2)).concat(AFTER.map(x => x.date.slice(2)));
+  const pad = a => a.concat(AFTER.map(() => null));
+  const ds = [{label: '종가', data: pad(c), borderColor: '#1d232b', borderWidth: 1.5, pointRadius: 0},
+    {label: '20일', data: pad(ma(c, 20)), borderColor: '#e07b00', borderWidth: 1, pointRadius: 0},
+    {label: '60일', data: pad(ma(c, 60)), borderColor: '#2457c5', borderWidth: 1, pointRadius: 0},
+    {label: '120일', data: pad(ma(c, 120)), borderColor: '#7a3ec8', borderWidth: 1, pointRadius: 0}];
+  if (AFTER.length) ds.push({label: '기준일 이후', data: c.map((v, i) => i === c.length - 1 ? v : null).concat(AFTER.map(x => x.close)),
+    borderColor: '#9aa3ad', borderDash: [4, 3], borderWidth: 1.5, pointRadius: 0});
   if (TARGET) ds.push({label: '목표가', data: c.map(() => TARGET), borderColor: '#d43c3c', borderDash: [5, 4], borderWidth: 1, pointRadius: 0});
   if (STOP) ds.push({label: '손절가', data: c.map(() => STOP), borderColor: '#2a62d6', borderDash: [5, 4], borderWidth: 1, pointRadius: 0});
   new Chart(document.getElementById('px'), {type: 'line', data: {labels: lab, datasets: ds},

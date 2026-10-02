@@ -69,6 +69,11 @@ def conn():
 def init():
     with conn() as c:
         c.executescript(SCHEMA)
+        cols = {r[1] for r in c.execute("PRAGMA table_info(scans)")}
+        if "kind" not in cols:  # live = 정기·수동 스캔, bt = 투자검증(과거 기준일)
+            c.execute("ALTER TABLE scans ADD COLUMN kind TEXT DEFAULT 'live'")
+        if "req_date" not in cols:  # 투자검증에서 사용자가 고른 기준일 (실제 기준일은 그 이전 마지막 거래일)
+            c.execute("ALTER TABLE scans ADD COLUMN req_date TEXT")
         for k, v in DEFAULTS.items():
             c.execute("INSERT OR IGNORE INTO settings(key, value) VALUES(?, ?)", (k, v))
     repair_numeric_blobs()
@@ -212,10 +217,10 @@ def set_manual(ticker, item, score, value="", note=""):
 
 
 # ── 스캔 ──
-def scan_start(profile, trigger, demo=False):
+def scan_start(profile, trigger, demo=False, kind="live", req_date=None):
     with conn() as c:
-        cur = c.execute("INSERT INTO scans(started_at, profile, status, message, demo, trigger) VALUES(?,?,?,?,?,?)",
-                        (now(), profile, "running", "시작", int(demo), trigger))
+        cur = c.execute("INSERT INTO scans(started_at, profile, status, message, demo, trigger, kind, req_date) "
+                        "VALUES(?,?,?,?,?,?,?,?)", (now(), profile, "running", "시작", int(demo), trigger, kind, req_date))
         return cur.lastrowid
 
 
@@ -238,18 +243,48 @@ def scan(scan_id):
     return dict(r) if r else None
 
 
-def latest_scan(done_only=True):
+def latest_scan(done_only=True, kind="live"):
+    """kind=None이면 투자검증 스캔까지 포함한 가장 최근 스캔."""
+    where = []
+    if done_only:
+        where.append("status='done'")
+    if kind:
+        where.append(f"COALESCE(kind,'live')='{kind}'")
+    q = "SELECT * FROM scans" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY id DESC LIMIT 1"
     with conn() as c:
-        q = "SELECT * FROM scans WHERE status='done' ORDER BY id DESC LIMIT 1" if done_only else \
-            "SELECT * FROM scans ORDER BY id DESC LIMIT 1"
         r = c.execute(q).fetchone()
     return dict(r) if r else None
 
 
 def prev_scan(scan_id):
     with conn() as c:
-        r = c.execute("SELECT * FROM scans WHERE status='done' AND id<? ORDER BY id DESC LIMIT 1", (scan_id,)).fetchone()
+        r = c.execute("SELECT * FROM scans WHERE status='done' AND COALESCE(kind,'live')='live' AND id<? "
+                      "ORDER BY id DESC LIMIT 1", (scan_id,)).fetchone()
     return dict(r) if r else None
+
+
+def bt_scan(date):
+    """투자검증 기준일(사용자가 고른 날 또는 실제 거래일)의 가장 최근 완료 결과."""
+    with conn() as c:
+        r = c.execute("SELECT * FROM scans WHERE kind='bt' AND status='done' AND (req_date=? OR base_date=?) "
+                      "ORDER BY id DESC LIMIT 1", (date, date)).fetchone()
+    return dict(r) if r else None
+
+
+def bt_base_date(date):
+    """투자검증 기준일에 해당하는 실제 거래일 (데이터를 받은 적이 있으면)."""
+    with conn() as c:
+        r = c.execute("SELECT base_date FROM scans WHERE kind='bt' AND base_date IS NOT NULL AND base_date != '' "
+                      "AND (req_date=? OR base_date=?) ORDER BY id DESC LIMIT 1", (date, date)).fetchone()
+    return r[0] if r else None
+
+
+def bt_scans():
+    """완료된 투자검증 기준일 목록 (기준일별 최신 1건)."""
+    with conn() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT * FROM scans WHERE id IN (SELECT MAX(id) FROM scans WHERE kind='bt' AND status='done' "
+            "GROUP BY base_date) ORDER BY base_date DESC")]
 
 
 NUM_COLS = ("close", "chg", "mcap", "s_short", "s_mid", "s_long", "base", "bonus", "penalty", "final",
@@ -329,21 +364,50 @@ def score_detail(scan_id, ticker):
     return d
 
 
-def score_history(ticker, limit=60):
-    """일자별 점수 추이. 같은 날 여러 번 스캔했으면 그날의 마지막 스캔값만 쓴다."""
+def score_history(ticker, limit=60, upto=None):
+    """일자별 점수 추이. 같은 날 여러 번 스캔했으면 그날의 마지막 스캔값만 쓴다.
+    upto(투자검증 기준일)가 있으면 그날까지의 정기·검증 스캔을 모두 쓰고, 없으면 정기 스캔만 쓴다."""
+    cond = "s2.base_date <= ?" if upto else "COALESCE(s2.kind,'live')='live'"
+    params = (ticker, ticker) + ((upto,) if upto else ()) + (limit,)
     with conn() as c:
         return [_fix_row(dict(r)) for r in c.execute(
-            """SELECT s.base_date, s.id, sc.final, sc.grade, sc.s_short, sc.s_mid, sc.s_long, sc.close
+            f"""SELECT s.base_date, s.id, sc.final, sc.grade, sc.s_short, sc.s_mid, sc.s_long, sc.close
                FROM scores sc JOIN scans s ON s.id=sc.scan_id
                WHERE sc.ticker=? AND s.id IN (
                    SELECT MAX(s2.id) FROM scores sc2 JOIN scans s2 ON s2.id=sc2.scan_id
-                   WHERE sc2.ticker=? AND s2.status='done' GROUP BY s2.base_date)
-               ORDER BY s.base_date DESC LIMIT ?""", (ticker, ticker, limit))][::-1]
+                   WHERE sc2.ticker=? AND s2.status='done' AND {cond} GROUP BY s2.base_date)
+               ORDER BY s.base_date DESC LIMIT ?""", params)][::-1]
+
+
+def ticker_scans(ticker):
+    """이 종목의 점수가 있는 평가 기준일 목록 (종목 상세의 기준일 선택용)."""
+    with conn() as c:
+        return [dict(r) for r in c.execute(
+            """SELECT s.id, s.base_date, COALESCE(s.kind,'live') AS kind FROM scans s WHERE s.id IN (
+                   SELECT MAX(s2.id) FROM scores sc JOIN scans s2 ON s2.id=sc.scan_id
+                   WHERE sc.ticker=? AND s2.status='done' AND sc.detail IS NOT NULL
+                   GROUP BY COALESCE(s2.kind,'live'), s2.base_date)
+               ORDER BY s.base_date DESC, s.id DESC LIMIT 80""", (ticker,))]
+
+
+def merge_index_cache(index_close):
+    """지수 종가를 날짜별로 쌓아 둔다 (투자검증의 시장 수익률 계산용)."""
+    for mk, ser in index_close.items():
+        old, _ = cache_get(f"index:{mk}")
+        old = old or {}
+        old.update({d.strftime("%Y%m%d"): float(v) for d, v in ser.dropna().items()})
+        cache_put(f"index:{mk}", old)
+
+
+def index_series(mk):
+    v, _ = cache_get(f"index:{mk}")
+    return dict(sorted((v or {}).items()))
 
 
 def prune_details(keep):
     with conn() as c:
-        ids = [r[0] for r in c.execute("SELECT id FROM scans WHERE status='done' ORDER BY id DESC")]
+        ids = [r[0] for r in c.execute("SELECT id FROM scans WHERE status='done' AND COALESCE(kind,'live')='live' "
+                                       "ORDER BY id DESC")]
         old = ids[int(keep):]
         if old:
             c.execute(f"UPDATE scores SET detail=NULL WHERE scan_id IN ({','.join('?'*len(old))})", old)

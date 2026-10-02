@@ -16,6 +16,7 @@
   <nav>
     {% set ep = request.endpoint %}
     <a href="{{ url_for('dashboard') }}" class="{{ 'on' if ep=='dashboard' }}">대시보드</a>
+    <a href="{{ url_for('verify') }}" class="{{ 'on' if ep=='verify' }}">투자검증</a>
     <a href="{{ url_for('manage') }}" class="{{ 'on' if ep=='manage' }}">보유·제외 종목</a>
     <a href="{{ url_for('scans') }}" class="{{ 'on' if ep=='scans' }}">스캔 기록</a>
     <a href="{{ url_for('criteria') }}" class="{{ 'on' if ep=='criteria' }}">평가 기준</a>

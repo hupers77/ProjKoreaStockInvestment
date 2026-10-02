@@ -7,9 +7,13 @@ from .bundle import Bundle
 SECTORS = ["전기전자", "화학", "운송장비", "의약품", "서비스업", "금융업", "유통업", "기계", "철강금속", "음식료품"]
 
 
-def make_bundle(n=300, days=300, seed=7):
+FULL_DAYS = 600  # 투자검증(과거 기준일)도 같은 가상 시세를 쓰도록 오늘까지 긴 이력을 한 번에 만든다
+
+
+def _paths(n, seed):
     rng = np.random.default_rng(seed)
-    dates = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=days)
+    dates = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=FULL_DAYS)
+    days = FULL_DAYS
     tickers = [f"D{i:05d}" for i in range(n)]  # 실제 종목코드와 겹치지 않게
     drift = rng.normal(0.0004, 0.0012, n)
     vol = rng.uniform(0.012, 0.035, n)
@@ -24,6 +28,24 @@ def make_bundle(n=300, days=300, seed=7):
     base_vol = shares * rng.uniform(0.001, 0.01, n)
     volume = pd.DataFrame(base_vol * rng.lognormal(0, 0.4, (days, n)), index=dates, columns=tickers).round(0)
     value = volume * close
+    return rng, dates, tickers, close, high, low, opn, volume, value, shares
+
+
+def full_close(n=300, seed=7):
+    """오늘까지의 가상 종가 전체 (투자검증 이후 수익률 계산용)."""
+    return _paths(n, seed)[3]
+
+
+def make_bundle(n=300, days=300, seed=7, base_date=None):
+    rng, dates, tickers, close, high, low, opn, volume, value, shares = _paths(n, seed)
+    full = close
+    if base_date:
+        keep = dates <= pd.Timestamp(base_date)
+        close, high, low, opn, volume, value = (x.loc[keep] for x in (close, high, low, opn, volume, value))
+        dates = dates[keep]
+    close, high, low, opn, volume, value = (x.iloc[-days:] for x in (close, high, low, opn, volume, value))
+    dates = dates[-days:]
+    start = close.iloc[0].values
     mcap = close.iloc[-1].values * shares
     market = np.where(rng.random(n) < 0.45, "KOSPI", "KOSDAQ")
     sector = rng.choice(SECTORS, n)
@@ -44,7 +66,8 @@ def make_bundle(n=300, days=300, seed=7):
     idx = {}
     for mk in ("KOSPI", "KOSDAQ"):
         cols = [t for t, m in zip(tickers, market) if m == mk]
-        idx[mk] = (close[cols].pct_change().mean(axis=1).fillna(0) + 1).cumprod() * (2600 if mk == "KOSPI" else 850)
+        ix = (full[cols].pct_change().mean(axis=1).fillna(0) + 1).cumprod() * (2600 if mk == "KOSPI" else 850)
+        idx[mk] = ix.loc[dates]
     fin = {}
     y0 = dates[-1].year
     for i, tk in enumerate(tickers[: int(n * 0.8)]):
