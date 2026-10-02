@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
 """
 
 DEFAULTS = {
-    "scan_time": "18:30",          # 평일 자동 스캔 시각 (한국 시간)
+    "scan_time": "20:30",          # 평일 자동 스캔 시각 (한국 시간). KRX 장 종료(20시) 뒤
     "scan_enabled": "1",
     "profile": "C",
     "k7_value_eok": "10",          # K7 20일 평균 거래대금 하한(억)
@@ -84,6 +84,10 @@ def init():
             seq[day] += 1
             c.execute("UPDATE scans SET code=? WHERE id=?", (f"{day}-{seq[day]:03d}", r[0]))
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_scans_code ON scans(code)")
+        # 장 종료가 20시로 바뀌어 기본 스캔 시각을 18:30 → 20:30으로 옮김. 예전 기본값 그대로인 경우만 1회 변경
+        if not c.execute("SELECT 1 FROM settings WHERE key='scan_time_2030'").fetchone():
+            c.execute("UPDATE settings SET value='20:30' WHERE key='scan_time' AND value='18:30'")
+            c.execute("INSERT OR IGNORE INTO settings(key, value) VALUES('scan_time_2030', '1')")
         for k, v in DEFAULTS.items():
             c.execute("INSERT OR IGNORE INTO settings(key, value) VALUES(?, ?)", (k, v))
     repair_numeric_blobs()

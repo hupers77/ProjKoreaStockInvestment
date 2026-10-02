@@ -27,7 +27,7 @@ def schedule():
     for j in sched.get_jobs():
         j.remove()
     if st.get("scan_enabled") == "1":
-        hh, mm = (st.get("scan_time") or "18:30").split(":")
+        hh, mm = (st.get("scan_time") or "20:30").split(":")
         sched.add_job(lambda: scanner.run_scan("schedule"), "cron", day_of_week="mon-fri",
                       hour=int(hh), minute=int(mm), id="daily", misfire_grace_time=3600, coalesce=True)
 
@@ -335,7 +335,7 @@ def settings():
         try:
             datetime.strptime(d["scan_time"], "%H:%M")
         except ValueError:
-            d["scan_time"] = "18:30"
+            d["scan_time"] = "20:30"
         db.save_settings(d)
         raw = {}
         for pk in db.PROFILE_KEYS:

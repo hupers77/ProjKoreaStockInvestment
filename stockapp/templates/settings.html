@@ -7,7 +7,7 @@
   <h2>자동 스캔</h2>
   <div class="kv">
     <label>평일 자동 스캔</label><label><input type="checkbox" name="scan_enabled" {{ 'checked' if st.scan_enabled=='1' }}> 사용</label>
-    <label>실행 시각 (한국 시간)</label><div><input type="time" name="scan_time" value="{{ st.scan_time }}"> <span class="small muted">투자자별 수급이 확정되는 18시 이후를 권장합니다. 프로그램이 켜져 있어야 실행됩니다.</span></div>
+    <label>실행 시각 (한국 시간)</label><div><input type="time" name="scan_time" value="{{ st.scan_time }}"> <span class="small muted">장 종료(20시) 뒤 투자자별 수급이 확정된 다음인 20:30 이후를 권장합니다. 프로그램이 켜져 있어야 실행됩니다.</span></div>
   </div>
 </div>
 <div class="card">
