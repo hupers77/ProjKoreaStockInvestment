@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}후원{% endblock %}
+{% block body %}
+<script>
+// 휴대폰이면 송금 버튼을, PC면 QR 안내와 주소 복사를 보여 준다.
+if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || matchMedia('(hover: none) and (pointer: coarse)').matches)
+  document.documentElement.classList.add('is-mobile');
+</script>
+<div class="card">
+  <h2>♥ 후원</h2>
+  <div class="muted">이 프로그램이 도움이 되셨다면 후원으로 응원해 주세요. 개발과 유지보수에 큰 힘이 됩니다.</div>
+</div>
+<div class="support-grid">
+  <div class="card">
+    <h2>카카오페이 <span class="muted small">{{ kakaopay_amount }}</span></h2>
+    <div class="only-mobile">
+      <a class="btn primary" href="{{ kakaopay_url }}" target="_blank" rel="noopener" style="width:100%;text-align:center">카카오페이로 송금하기</a>
+      <div class="muted small" style="margin-top:6px">카카오페이 송금 화면으로 바로 이동합니다.</div>
+    </div>
+    <div class="only-desktop muted small">휴대폰 카메라로 아래 QR 코드를 찍으면 카카오페이 송금 화면이 열립니다.</div>
+    <img class="qr" src="{{ url_for('static', filename='kakaopay-qr.png') }}" alt="카카오페이 송금 QR 코드 ({{ kakaopay_amount }})">
+    <div class="only-desktop muted small">송금 링크는 모바일에서 열립니다. PC에서는 아래 주소를 복사해 휴대폰으로 보내 주세요.</div>
+    <div class="copyrow only-desktop">
+      <input type="text" id="kp-url" value="{{ kakaopay_url }}" readonly>
+      <button class="btn" type="button" id="kp-copy">주소 복사</button>
+    </div>
+  </div>
+  <div class="card">
+    <h2>GitHub Sponsors {% if not sponsors_url %}<span class="soon-badge">준비 중</span>{% endif %}</h2>
+    <div class="muted small">For supporters outside Korea (card / PayPal).</div>
+    {% if sponsors_url %}
+      <p><a class="btn primary" href="{{ sponsors_url }}" target="_blank" rel="noopener">GitHub Sponsors로 후원하기</a></p>
+    {% else %}
+      <p class="muted">GitHub Sponsors 승인을 기다리고 있습니다. 승인되면 이곳에서 후원할 수 있습니다.<br>
+      <span class="small">GitHub Sponsors is pending approval. Coming soon.</span></p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}<script>
+document.getElementById('kp-copy').addEventListener('click', async () => {
+  const el = document.getElementById('kp-url'), b = document.getElementById('kp-copy');
+  try { await navigator.clipboard.writeText(el.value); }
+  catch (e) { el.select(); document.execCommand('copy'); }
+  b.textContent = '복사됨'; setTimeout(() => b.textContent = '주소 복사', 1500);
+});
+</script>{% endblock %}

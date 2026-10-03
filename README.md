@@ -75,7 +75,7 @@ Docker를 쓰면: `docker build -t stockapp . && docker run -p 5000:5000 -v $(pw
 
 화면 캡처는 모두 가상(데모) 데이터입니다.
 
-상단 오른쪽에는 다음 자동 스캔 시각과 함께 블로그(@사랑나무아빠), Documents(이 README), 후원 링크가 있습니다. 링크 주소는 `stockapp/web.py`의 `BLOG_URL`, `DOCS_URL`, `SUPPORT_URL`에서 바꿉니다. `SUPPORT_URL`이 비어 있으면 후원은 흐리게 '준비 중'으로 표시됩니다.
+상단 오른쪽에는 다음 자동 스캔 시각과 함께 블로그(@사랑나무아빠), Documents(이 README), ♥ 후원 링크가 있습니다. 후원 화면에는 카카오페이(5,000원)와 GitHub Sponsors가 있습니다. 카카오페이는 PC에서 QR 코드와 송금 주소 복사 버튼을 보여 주고, 휴대폰에서는 '카카오페이로 송금하기' 버튼을 함께 보여 줍니다. GitHub Sponsors는 승인 전이라 '준비 중'으로 표시됩니다. 링크 주소는 `stockapp/web.py`의 `BLOG_URL`, `DOCS_URL`, `KAKAOPAY_URL`, `SPONSORS_URL`에서 바꿉니다(`SPONSORS_URL`이 비어 있으면 준비 중).
 
 ### 3-1. 대시보드
 

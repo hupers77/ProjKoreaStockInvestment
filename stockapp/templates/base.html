@@ -26,8 +26,7 @@
   <span class="links">
     <a href="{{ blog_url }}" target="_blank" rel="noopener">@사랑나무아빠</a>
     <a href="{{ docs_url }}" target="_blank" rel="noopener">Documents</a>
-    {% if support_url %}<a href="{{ support_url }}" target="_blank" rel="noopener" class="support">♥ 후원</a>
-    {% else %}<span class="soon" title="후원 링크 준비 중">♥ 후원</span>{% endif %}
+    <a href="{{ url_for('support') }}" class="support{{ ' on' if request.endpoint=='support' }}">♥ 후원</a>
   </span>
 </header>
 <main>

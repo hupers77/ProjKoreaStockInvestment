@@ -14,10 +14,12 @@ from .framework import BONUSES, ITEM_MAP, ITEMS, KNOCKOUTS, PENALTIES, PERSPECTI
 app = Flask(__name__)
 sched = BackgroundScheduler(timezone="Asia/Seoul")
 
-# 상단 외부 링크. SUPPORT_URL 이 비어 있으면 '후원'은 준비 중으로 표시된다.
+# 상단 외부 링크와 후원 화면(/support) 주소. SPONSORS_URL 이 비어 있으면 GitHub Sponsors 는 준비 중으로 표시된다.
 BLOG_URL = "http://blog.naver.com/hupers"
 DOCS_URL = "https://github.com/hupers77/ProjKoreaStockInvestment#readme"
-SUPPORT_URL = ""
+KAKAOPAY_URL = "https://qr.kakaopay.com/Ej9H7kdOT9c404930"
+KAKAOPAY_AMOUNT = "5,000원"
+SPONSORS_URL = ""
 
 GRADE_INFO = {
     "S": ("S", "투자 선정", "90점 이상"),
@@ -47,7 +49,7 @@ def next_run():
 def common():
     return {"profiles": PROFILES, "grade_info": GRADE_INFO, "running": scanner.is_running(),
             "next_run": next_run(), "now": datetime.now(),
-            "blog_url": BLOG_URL, "docs_url": DOCS_URL, "support_url": SUPPORT_URL}
+            "blog_url": BLOG_URL, "docs_url": DOCS_URL}
 
 
 def _fmt_date(d):
@@ -307,6 +309,12 @@ def api_scans_purge():
         return jsonify(ok=False, message="스캔이 진행 중입니다. 끝난 뒤에 지우세요.")
     n = db.delete_old_scans(365)
     return jsonify(ok=True, message=f"1년 지난 스캔 기록 {n}건을 지웠습니다." if n else "1년 지난 스캔 기록이 없습니다.")
+
+
+@app.route("/support")
+def support():
+    return render_template("support.html", kakaopay_url=KAKAOPAY_URL, kakaopay_amount=KAKAOPAY_AMOUNT,
+                           sponsors_url=SPONSORS_URL)
 
 
 @app.route("/criteria", methods=["GET", "POST"])

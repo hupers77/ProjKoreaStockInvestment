@@ -20,10 +20,18 @@ header.top nav a { color: #c9d3df; padding: 8px 10px; border-radius: 6px; }
 header.top nav a.on, header.top nav a:hover { background: #2a3646; color: #fff; text-decoration: none; }
 header.top .right { margin-left: auto; font-size: 12px; color: #aab6c4; }
 header.top .links { display: flex; gap: 2px; align-items: center; font-size: 12px; }
-header.top .links a, header.top .links .soon { color: #c9d3df; padding: 6px 8px; border-radius: 6px; }
-header.top .links a:hover { background: #2a3646; color: #fff; text-decoration: none; }
+header.top .links a { color: #c9d3df; padding: 6px 8px; border-radius: 6px; }
+header.top .links a.on, header.top .links a:hover { background: #2a3646; color: #fff; text-decoration: none; }
 header.top .links a.support { color: #ff9db0; }
-header.top .links .soon { color: #6f7b89; cursor: default; }
+.support-grid { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-start; }
+.support-grid > .card { flex: 1 1 320px; }
+.qr { display: block; width: 100%; max-width: 300px; margin: 8px auto; border-radius: 10px; border: 1px solid var(--line); }
+.copyrow { display: flex; gap: 6px; margin-top: 8px; }
+.copyrow input { flex: 1; min-width: 0; }
+.only-mobile { display: none; }
+html.is-mobile .only-mobile { display: block; }
+html.is-mobile .only-desktop { display: none; }
+.soon-badge { display: inline-block; font-size: 12px; color: #6b7480; background: #eef0f3; border-radius: 4px; padding: 1px 6px; margin-left: 6px; }
 main { max-width: 1400px; margin: 0 auto; padding: 16px; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
 .card h2 { font-size: 15px; margin: 0 0 10px; }
