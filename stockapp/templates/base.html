@@ -23,6 +23,12 @@
     <a href="{{ url_for('settings') }}" class="{{ 'on' if ep=='settings' }}">설정</a>
   </nav>
   <span class="right">다음 자동 스캔: {{ next_run }}</span>
+  <span class="links">
+    <a href="{{ blog_url }}" target="_blank" rel="noopener">@사랑나무아빠</a>
+    <a href="{{ docs_url }}" target="_blank" rel="noopener">Documents</a>
+    {% if support_url %}<a href="{{ support_url }}" target="_blank" rel="noopener" class="support">♥ 후원</a>
+    {% else %}<span class="soon" title="후원 링크 준비 중">♥ 후원</span>{% endif %}
+  </span>
 </header>
 <main>
 {% block body %}{% endblock %}

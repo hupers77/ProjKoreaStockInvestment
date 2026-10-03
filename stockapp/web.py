@@ -14,6 +14,11 @@ from .framework import BONUSES, ITEM_MAP, ITEMS, KNOCKOUTS, PENALTIES, PERSPECTI
 app = Flask(__name__)
 sched = BackgroundScheduler(timezone="Asia/Seoul")
 
+# 상단 외부 링크. SUPPORT_URL 이 비어 있으면 '후원'은 준비 중으로 표시된다.
+BLOG_URL = "http://blog.naver.com/hupers"
+DOCS_URL = "https://github.com/hupers77/ProjKoreaStockInvestment#readme"
+SUPPORT_URL = ""
+
 GRADE_INFO = {
     "S": ("S", "투자 선정", "90점 이상"),
     "A": ("A", "투자 가능", "80~89점"),
@@ -41,7 +46,8 @@ def next_run():
 @app.context_processor
 def common():
     return {"profiles": PROFILES, "grade_info": GRADE_INFO, "running": scanner.is_running(),
-            "next_run": next_run(), "now": datetime.now()}
+            "next_run": next_run(), "now": datetime.now(),
+            "blog_url": BLOG_URL, "docs_url": DOCS_URL, "support_url": SUPPORT_URL}
 
 
 def _fmt_date(d):
