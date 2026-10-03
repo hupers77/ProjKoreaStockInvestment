@@ -55,14 +55,15 @@
     <h2>점수 상위 종목의 성과</h2>
     <div class="tablewrap"><table>
       <tr><th class="l">대상</th><th>종목 수</th><th>평균 수익률</th><th>중앙값</th><th>상승 비율</th><th>전체 평균 대비</th></tr>
-      {% for n, x in tops %}
+      {% for n, x in tops %}{% if x.avg is not none %}
       <tr><td class="l">점수 상위 {{ n }}</td><td>{{ x.n }}</td>
         <td class="{{ 'up' if x.avg>0 else 'down' if x.avg<0 }}"><b>{{ pct|format(x.avg) }}</b></td><td>{{ pct|format(x.med) }}</td><td>{{ x.win|num }}%</td>
-        <td class="{{ 'up' if x.avg>allr.avg else 'down' }}">{{ '%+.1f%%p'|format(x.avg - allr.avg) }}</td></tr>
-      {% endfor %}
+        <td class="{{ 'up' if allr and allr.avg is not none and x.avg>allr.avg else 'down' }}">{{ '%+.1f%%p'|format(x.avg - allr.avg) if allr and allr.avg is not none else '-' }}</td></tr>
+      {% endif %}{% endfor %}
       {% if allr and allr.n %}<tr><td class="l">채점 종목 전체</td><td>{{ allr.n }}</td><td class="{{ 'up' if allr.avg>0 else 'down' if allr.avg<0 }}">{{ pct|format(allr.avg) }}</td><td>{{ pct|format(allr.med) }}</td><td>{{ allr.win|num }}%</td><td>-</td></tr>{% endif %}
-      {% for mk, x in idx.items() %}<tr><td class="l">{{ mk }} 지수</td><td>-</td><td class="{{ 'up' if x.ret>0 else 'down' if x.ret<0 }}">{{ pct|format(x.ret) }}</td><td>-</td><td>-</td>
-        <td>{{ '%+.1f%%p'|format(x.ret - allr.avg) if allr and allr.avg is not none else '-' }}</td></tr>{% endfor %}
+      {% for mk, x in idx.items() %}{% if x.ret is not none %}<tr><td class="l">{{ mk }} 지수</td><td>-</td><td class="{{ 'up' if x.ret>0 else 'down' if x.ret<0 }}">{{ pct|format(x.ret) }}</td><td>-</td><td>-</td>
+        <td>{{ '%+.1f%%p'|format(x.ret - allr.avg) if allr and allr.avg is not none else '-' }}</td></tr>{% endif %}{% endfor %}
+      {% if not (allr and allr.n) %}<tr><td class="l muted" colspan="6">기준일 이후 거래일 시세가 아직 없어 수익률을 계산할 수 없습니다. 다음 거래일 장 마감(20:30) 뒤에 다시 스캔하면 채워집니다.</td></tr>{% endif %}
     </table></div>
     <p class="small muted">수익률 = 기준일 종가 → 평가일 종가, 배당·수수료 제외. 같은 기준·가중치로 점수가 높을수록 수익률이 높으면 현재 평가 기준이 그 시기에 잘 맞았다는 뜻입니다.</p>
   </div>
@@ -73,7 +74,7 @@
     {% set ed = e.date or scan.base_date %}
     <div class="small">조회일 {{ ed[2:4] }}/{{ ed[4:6] }}/{{ ed[6:8] }} · 지수 {{ e.index|num(2) }} · 20일 {{ e.r20|num(1) }}%</div>
     <ul class="small" style="margin:6px 0 0;padding-left:18px">{% for c in e.conds %}<li>{{ c }}</li>{% endfor %}</ul>
-    {% if idx[mk] %}<div class="small" style="margin-top:6px">이후 지수 {{ idx[mk].base|num(2) }} → {{ idx[mk].last|num(2) }} (<b class="{{ 'up' if idx[mk].ret>0 else 'down' }}">{{ pct|format(idx[mk].ret) }}</b>)</div>{% endif %}
+    {% if idx[mk] and idx[mk].ret is not none %}<div class="small" style="margin-top:6px">이후 지수 {{ idx[mk].base|num(2) }} → {{ idx[mk].last|num(2) }} (<b class="{{ 'up' if idx[mk].ret>0 else 'down' }}">{{ pct|format(idx[mk].ret) }}</b>)</div>{% endif %}
   </div>
   {% endfor %}
 </div>
