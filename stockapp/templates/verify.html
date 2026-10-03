@@ -26,6 +26,8 @@
       title="{{ '받아 둔 기준일 데이터로 현재 기준에 맞춰 다시 계산' if has_data else '이 기준일 데이터가 없습니다. 지금 스캔을 먼저 하세요' }}">검증 계산</button>
     <button class="btn primary" onclick="startVerify('fetch')" {{ 'disabled' if running or bad_date }}
       title="기준일 1년 전부터의 데이터와 기준일 이후 시세를 받아 계산">지금 스캔</button>
+    {% if scan or has_data %}<button class="btn" onclick="deleteVerify()" {{ 'disabled' if running }}
+      title="이 기준일의 검증 결과와 받아 둔 데이터를 지웁니다">결과 삭제</button>{% endif %}
   </div>
   {% if bad_date %}<div class="err" style="margin-top:10px">오늘 이전의 날짜를 고르세요.</div>{% endif %}
   {% if fail %}<div class="err scan-msg" style="margin-top:10px">최근 검증 실패: {{ fail.message }}</div>{% endif %}
@@ -133,6 +135,12 @@
 {% endblock %}
 {% block scripts %}
 <script>
+async function deleteVerify() {
+  if (!confirm('{{ date|d8 }} 기준 투자검증 결과와 받아 둔 데이터를 지울까요? 되돌릴 수 없습니다.')) return;
+  const j = await postJSON('/api/verify/delete', {date: '{{ date }}'});
+  alert(j.message);
+  if (j.ok) location.href = '{{ url_for('verify') }}';
+}
 async function startVerify(mode) {
   const j = await postJSON('/api/verify', {date: '{{ date }}', mode});
   if (j.ok) {

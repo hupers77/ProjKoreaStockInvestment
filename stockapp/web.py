@@ -1,5 +1,6 @@
 """웹 서버 (Flask) + 매일 자동 스캔 스케줄러."""
 import json
+import os
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -309,6 +310,26 @@ def api_scans_purge():
         return jsonify(ok=False, message="스캔이 진행 중입니다. 끝난 뒤에 지우세요.")
     n = db.delete_old_scans(365)
     return jsonify(ok=True, message=f"1년 지난 스캔 기록 {n}건을 지웠습니다." if n else "1년 지난 스캔 기록이 없습니다.")
+
+
+@app.post("/api/verify/delete")
+def api_verify_delete():
+    """투자검증 기준일의 결과와 받아 둔 데이터를 지운다. 공용 시세 캐시는 남긴다."""
+    if scanner.is_running():
+        return jsonify(ok=False, message="스캔이 진행 중입니다. 끝난 뒤에 지우세요.")
+    date = ((request.get_json(silent=True) or {}).get("date") or "").replace("-", "")
+    if len(date) != 8 or not date.isdigit():
+        return jsonify(ok=False, message="기준일이 올바르지 않습니다.")
+    bases = db.delete_bt(date)
+    files = 0
+    for b in set(bases) | {date}:
+        path = scanner.bt_bundle_path(b)
+        if os.path.exists(path):
+            os.remove(path)
+            files += 1
+    if not bases and not files:
+        return jsonify(ok=True, message=f"{_fmt_date(date)} 투자검증 데이터가 없습니다.")
+    return jsonify(ok=True, message=f"{_fmt_date(date)} 투자검증 결과와 받아 둔 데이터를 지웠습니다.")
 
 
 @app.route("/support")

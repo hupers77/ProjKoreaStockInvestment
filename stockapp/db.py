@@ -430,6 +430,29 @@ def delete_bt_days(base_date):
             c.execute(f"DELETE FROM scans WHERE id IN ({q})", ids)
 
 
+def delete_bt(date):
+    """투자검증 기준일(고른 날 또는 실제 거래일)의 결과·이후 날짜 점수를 모두 지운다. 지운 실제 기준일 목록을 돌려준다."""
+    with conn() as c:
+        rows = c.execute("SELECT id, base_date FROM scans WHERE kind='bt' AND status != 'running' "
+                         "AND (req_date=? OR base_date=?)", (date, date)).fetchall()
+        bases = sorted({r["base_date"] for r in rows if r["base_date"]} | {date})
+        ids = [r["id"] for r in rows]
+        q = ",".join("?" * len(bases))
+        ids += [r[0] for r in c.execute(f"SELECT id FROM scans WHERE kind='btd' AND req_date IN ({q})", bases)]
+        # 실제 기준일로 저장된 다른 요청일의 결과도 함께 지운다
+        ids += [r[0] for r in c.execute(f"SELECT id FROM scans WHERE kind='bt' AND status != 'running' "
+                                        f"AND base_date IN ({q})", bases)]
+        ids = sorted(set(ids))
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            qq = ",".join("?" * len(chunk))
+            c.execute(f"DELETE FROM scores WHERE scan_id IN ({qq})", chunk)
+            c.execute(f"DELETE FROM scans WHERE id IN ({qq})", chunk)
+        for b in bases:
+            c.execute("DELETE FROM kv_cache WHERE key=?", (f"snap:{b}:bt",))
+    return bases if ids else []
+
+
 def ticker_scans(ticker):
     """이 종목의 점수가 있는 평가 기준일 목록 (종목 상세의 기준일 선택용)."""
     with conn() as c:
