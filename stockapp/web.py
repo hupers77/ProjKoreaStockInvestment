@@ -2,6 +2,7 @@
 import json
 from datetime import datetime, timedelta
 
+import pandas as pd
 from apscheduler.schedulers.background import BackgroundScheduler
 from urllib.parse import quote
 
@@ -133,18 +134,21 @@ def stock(ticker):
     excluded = any(e["ticker"] == ticker for e in db.exclusions())
     groups = {p: [ITEM_MAP[i[0]] for i in ITEMS if i[1] == p] for p in PERSPECTIVES}
     if scan["demo"]:  # 데모는 DB에 시세가 없으므로 같은 가상 시세를 다시 만든다
-        from .demo import full_close
-        fc = full_close()
+        from .demo import full_close, full_value
+        fc, fv = full_close(), full_value()
         s_ = fc[ticker].dropna() if ticker in fc.columns else fc.iloc[:, :0]
-        px = [{"date": d.strftime("%Y%m%d"), "close": float(v)} for d, v in s_.items() if d.strftime("%Y%m%d") <= base][-260:]
-        px_after = [{"date": d.strftime("%Y%m%d"), "close": float(v)} for d, v in s_.items() if d.strftime("%Y%m%d") > base]
+        v_ = fv[ticker] if ticker in fv.columns else pd.Series(dtype=float)
+        rows = [{"date": d.strftime("%Y%m%d"), "close": float(v), "value": float(v_.get(d, 0) or 0)} for d, v in s_.items()]
+        px = [x for x in rows if x["date"] <= base][-260:]
+        px_after = [x for x in rows if x["date"] > base]
     else:
         with db.conn() as c:
             px = [dict(x) for x in c.execute(
-                "SELECT date, close FROM prices WHERE ticker=? AND date<=? AND close>0 ORDER BY date DESC LIMIT 260",
+                "SELECT date, close, value FROM prices WHERE ticker=? AND date<=? AND close>0 ORDER BY date DESC LIMIT 260",
                 (ticker, base))][::-1]
             px_after = [dict(x) for x in c.execute(
-                "SELECT date, close FROM prices WHERE ticker=? AND date>? AND close>0 ORDER BY date", (ticker, base))] if bt else []
+                "SELECT date, close, value FROM prices WHERE ticker=? AND date>? AND close>0 ORDER BY date",
+                (ticker, base))] if bt else []
     if not bt:
         px_after = []
     res = None
@@ -160,7 +164,10 @@ def stock(ticker):
             im = vf.index_returns(base, res["eval_date"], scan["demo"]).get(r["market"])
             res["idx"] = im
             res["ex"] = res["ret"] - im["ret"] if im else None
-    return render_template("stock.html", scan=scan, r=r, d=r["detail"], groups=groups, manual=manual, hist=hist,
+    d4_auto = r["detail"].get("d4_auto")
+    if d4_auto is None:  # 이전 스캔 기록에는 자동 판정 값이 따로 없다
+        d4_auto = any(a[0] == "D4" and a[3] == "자동" for a in r["detail"].get("adj", []))
+    return render_template("stock.html", scan=scan, r=r, d=r["detail"], groups=groups, manual=manual, hist=hist, d4_auto=d4_auto,
                            holding=holding, excluded=excluded, sources=meta.get("sources", {}), bt=bt, res=res,
                            options=db.ticker_scans(ticker), options_live_id=(db.latest_scan() or {}).get("id"), px_json=json.dumps(px), after_json=json.dumps(px_after),
                            hist_json=json.dumps(hist), penalties=PENALTIES, bonuses=BONUSES,

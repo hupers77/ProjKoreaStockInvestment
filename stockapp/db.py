@@ -377,7 +377,7 @@ def save_scores(scan_id, results, with_detail=True):
     for r in results:
         detail = {
             "items": {k: [v.score, v.value, v.basis, v.est, v.src] for k, v in r["items"].items()},
-            "persp": r["persp"], "cov": r["cov"], "adj": r["adj"], "gate": r["gate"],
+            "persp": r["persp"], "cov": r["cov"], "adj": r["adj"], "d4_auto": r.get("d4_auto"), "gate": r["gate"],
             "knockout": r["knockout"], "reliability": r["reliability"], "grade_label": r["grade_label"],
             "weights": r.get("weights"),
         }

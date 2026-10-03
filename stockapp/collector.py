@@ -13,6 +13,16 @@ from . import db
 from .bundle import Bundle
 
 PAUSE = 0.15
+FINAL_HM = (20, 30)  # 이 시각 이후에 받은 그날 데이터는 장 마감(20시) 뒤 확정치로 보고 다시 받지 않는다
+RECHECK_DAYS = 10    # 최근 거래일 중 마감 전에 받은 날은 다시 받는다 (장중 스캔으로 생긴 미완성 시세 교체)
+
+
+def _is_final(day, fetched_at):
+    """day(YYYYMMDD) 데이터를 fetched_at(DB 시각 문자열)에 받았다면 확정치인지."""
+    if not fetched_at:
+        return False
+    got = datetime.strptime(fetched_at, "%Y-%m-%d %H:%M:%S")
+    return got >= datetime.strptime(day, "%Y%m%d").replace(hour=FINAL_HM[0], minute=FINAL_HM[1])
 
 
 def _login(st):
@@ -82,13 +92,25 @@ def _index_closes_fdr(start, base):
 def trading_dates(stock, base, log=print, warnings=None):
     """거래일 목록과 KOSPI·KOSDAQ 지수 종가. pykrx가 실패하면 FinanceDataReader로 대체한다."""
     start = (datetime.strptime(base, "%Y%m%d") - timedelta(days=365 * 6)).strftime("%Y%m%d")
+    # 지수 이력은 DB에 쌓여 있으므로, 캐시가 6년 전부터 있으면 마지막 저장일 10일 전부터만 받는다
+    cached = {mk: db.index_series(mk) for mk in ("KOSPI", "KOSDAQ")}
+    fetch_from = start
+    near = (datetime.strptime(start, "%Y%m%d") + timedelta(days=10)).strftime("%Y%m%d")
+    if all(cached.values()) and all(min(v) <= near for v in cached.values()):
+        last = min(max(v) for v in cached.values())
+        fetch_from = max(start, (datetime.strptime(last, "%Y%m%d") - timedelta(days=10)).strftime("%Y%m%d"))
     errors = []
-    for name, fn in (("pykrx", lambda: _index_closes_pykrx(stock, start, base)),
-                     ("FinanceDataReader", lambda: _index_closes_fdr(start, base))):
+    for name, fn in (("pykrx", lambda: _index_closes_pykrx(stock, fetch_from, base)),
+                     ("FinanceDataReader", lambda: _index_closes_fdr(fetch_from, base))):
         try:
             out = fn()
             out = {k: v[v > 0].sort_index() for k, v in out.items()}
-            out = {k: v[~v.index.duplicated()] for k, v in out.items()}
+            if fetch_from > start:
+                for mk, v in out.items():
+                    first = v.index[0].strftime("%Y%m%d") if len(v) else base
+                    old = pd.Series({pd.Timestamp(d): x for d, x in cached[mk].items() if start <= d < first}, dtype=float)
+                    out[mk] = pd.concat([old, v]).sort_index()
+            out = {k: v[~v.index.duplicated(keep="last")] for k, v in out.items()}
             if errors and warnings is not None:
                 warnings.append(f"KRX 지수 조회 실패로 {name} 지수 사용: {errors[0]}")
             dates = [d.strftime("%Y%m%d") for d in out["KOSPI"].index]
@@ -119,8 +141,9 @@ def krx_check(stock, st):
 
 def sync_prices(stock, dates, log):
     with db.conn() as c:
-        have = {r[0] for r in c.execute("SELECT date FROM price_days")}
-    need = [d for d in dates if d not in have]
+        have = {r[0]: r[1] for r in c.execute("SELECT date, fetched_at FROM price_days")}
+    recent = set(dates[-RECHECK_DAYS:])
+    need = [d for d in dates if d not in have or (d in recent and not _is_final(d, have[d]))]
     fails = []
     for i, d in enumerate(need):
         if i % 10 == 0:
@@ -158,46 +181,31 @@ def load_panel(dates):
     return panel
 
 
-def collect(st, log=print, with_dart=True, base_date=None, on_base=None):
-    """base_date(YYYYMMDD)를 주면 투자검증용으로 그날 이전 마지막 거래일 시점의 데이터만 모은다.
-    이때 기준일 이후 오늘까지의 일별 시세도 받아 두어 이후 수익률을 계산할 수 있게 한다."""
-    from pykrx import stock
-    _login(st)
-    warnings, sources = [], {}
-    today = datetime.now().strftime("%Y%m%d")
-    log("KRX 로그인 확인 중…")
-    login_msgs = krx_check(stock, st)
-    log("거래일 확인 중 (지수)…")
-    full_dates, index_close = trading_dates(stock, today, log, warnings)
-    try:
-        db.merge_index_cache(index_close)
-    except Exception as e:
-        warnings.append(f"지수 이력 저장 실패: {e}")
-    if base_date:
-        all_dates = [d for d in full_dates if d <= base_date]
-        if not all_dates:
-            raise RuntimeError(f"{base_date} 이전 거래일 데이터가 없습니다.")
-        base = all_dates[-1]
-        index_close = {k: v[v.index <= pd.Timestamp(base)] for k, v in index_close.items()}
-    else:
-        all_dates = full_dates
-        base = all_dates[-1]
-    if on_base:
-        on_base(base)
-    n_hist = int(st.get("history_days", 300))
-    dates = all_dates[-n_hist:]
-    try:
-        sync_prices(stock, dates, log)
-        if base_date:
-            after = [d for d in full_dates if d > base]
-            if after:
-                log("기준일 이후 시세 저장 중 (수익률 계산용)…")
-                sync_prices(stock, after, log)
-    except Exception as e:
-        raise RuntimeError(f"KRX 일별 시세 조회 실패: {type(e).__name__} {e}. " + " ".join(login_msgs))
-    panel = load_panel(dates)
-    sources["가격"] = f"KRX 일별 시세, 기준일 {base}"
+def _df_pack(df):
+    return {"index": [str(i) for i in df.index], "columns": list(df.columns),
+            "data": df.astype(object).where(df.notna(), None).values.tolist()}
 
+
+def _df_unpack(d):
+    df = pd.DataFrame(d["data"], index=pd.Index(d["index"], name="ticker"), columns=d["columns"])
+    for col in df.columns:
+        if col not in ("market", "name", "sector"):
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
+
+
+def snapshot(stock, base, dates, all_dates, base_date, log, warnings, sources):
+    """기준일 하루치 종목 정보·밸류에이션·수급·지분율·관리종목·환율.
+    같은 기준일을 다시 스캔하면 다시 받지 않도록, 마감 뒤(확정치)에 받은 결과는 DB에 보관한다."""
+    key = f"snap:{base}:{'bt' if base_date else 'live'}"
+    cached, _ = db.cache_get(key)
+    if cached:
+        log("기준일 종목 정보·수급은 이미 받아 둔 확정치를 사용합니다.")
+        sources.update(cached["sources"])
+        warnings.extend(cached["warnings"])
+        fx = pd.Series({pd.Timestamp(k): v for k, v in cached["fx"].items()}, dtype=float) if cached["fx"] else None
+        return _df_unpack(cached["info"]), cached["mf"], set(cached["admin"]), fx
+    n_warn, src0 = len(warnings), dict(sources)
     log("종목 정보·밸류에이션 수집 중…")
     frames = []
     for mk in ("KOSPI", "KOSDAQ"):
@@ -269,6 +277,75 @@ def collect(st, log=print, with_dart=True, base_date=None, on_base=None):
                 warnings.append(f"{mk} 외국인 지분율({d}) 실패: {e}")
         info[col] = s.reindex(info.index) if len(s) else None
 
+    admin = set()
+    if not base_date:  # 과거 시점의 관리종목 목록은 무료로 구할 수 없다 (현재 목록을 쓰면 미래 정보가 섞인다)
+        try:
+            import FinanceDataReader as fdr
+            adm = fdr.StockListing("KRX-ADMIN")
+            admin = set(adm["Symbol"].astype(str))
+            sources["관리종목"] = "KIND 관리종목 목록"
+        except Exception as e:
+            warnings.append(f"관리종목 목록 조회 실패(K1 일부 미확인): {e}")
+    fx = None
+    try:
+        import FinanceDataReader as fdr
+        b_dt = datetime.strptime(base, "%Y%m%d")
+        fx = fdr.DataReader("USD/KRW", (b_dt - timedelta(days=90)).strftime("%Y-%m-%d"), b_dt.strftime("%Y-%m-%d"))["Close"]
+    except Exception as e:
+        warnings.append(f"환율 조회 실패(S18 ④ 제외): {e}")
+
+    if len(warnings) == n_warn and _is_final(base, db.now()):  # 일부라도 실패했으면 보관하지 않고 다음에 다시 받는다
+        db.cache_put(key, {"info": _df_pack(info), "mf": mf, "admin": sorted(admin),
+                           "fx": {d.strftime("%Y%m%d"): float(v) for d, v in fx.items()} if fx is not None else None,
+                           "sources": {k: v for k, v in sources.items() if src0.get(k) != v},
+                           "warnings": warnings[n_warn:]})
+    return info, mf, admin, fx
+
+
+def collect(st, log=print, with_dart=True, base_date=None, on_base=None):
+    """base_date(YYYYMMDD)를 주면 투자검증용으로 그날 이전 마지막 거래일 시점의 데이터만 모은다.
+    이때 기준일 이후 오늘까지의 일별 시세도 받아 두어 이후 수익률을 계산할 수 있게 한다."""
+    from pykrx import stock
+    _login(st)
+    warnings, sources = [], {}
+    today = datetime.now().strftime("%Y%m%d")
+    log("KRX 로그인 확인 중…")
+    login_msgs = krx_check(stock, st)
+    log("거래일 확인 중 (지수)…")
+    full_dates, index_close = trading_dates(stock, today, log, warnings)
+    try:
+        db.merge_index_cache(index_close)
+    except Exception as e:
+        warnings.append(f"지수 이력 저장 실패: {e}")
+    if base_date:
+        all_dates = [d for d in full_dates if d <= base_date]
+        if not all_dates:
+            raise RuntimeError(f"{base_date} 이전 거래일 데이터가 없습니다.")
+        base = all_dates[-1]
+        index_close = {k: v[v.index <= pd.Timestamp(base)] for k, v in index_close.items()}
+    else:
+        all_dates = full_dates
+        base = all_dates[-1]
+    if on_base:
+        on_base(base)
+    n_hist = int(st.get("history_days", 300))
+    dates = all_dates[-n_hist:]
+    try:
+        sync_prices(stock, dates, log)
+        if base_date:
+            after = [d for d in full_dates if d > base]
+            if after:
+                log("기준일 이후 시세 저장 중 (수익률 계산용)…")
+                sync_prices(stock, after, log)
+    except Exception as e:
+        raise RuntimeError(f"KRX 일별 시세 조회 실패: {type(e).__name__} {e}. " + " ".join(login_msgs))
+    panel = load_panel(dates)
+    sources["가격"] = f"KRX 일별 시세, 기준일 {base}"
+
+    info, mf, admin, fx = snapshot(stock, base, dates, all_dates, base_date, log, warnings, sources)
+    if base_date:
+        warnings.append("투자검증: 과거 관리종목 목록이 없어 K1은 기준일 거래량 0(거래정지) 여부만 확인합니다.")
+
     log("과거 밸류에이션·배당 이력 수집 중…")
     pbr_hist, dps_hist = {}, {}
     samples = []
@@ -294,8 +371,10 @@ def collect(st, log=print, with_dart=True, base_date=None, on_base=None):
     last_fy = int(base[:4]) - 1
     if dps_df is not None and last_fy not in dps_df.columns:
         dps_df[last_fy] = info["dps"].reindex(dps_df.index)
-    # 5년 전 상장주식수 (L20)
-    d5 = [d for d in all_dates if d <= f"{int(base[:4]) - 5}{base[4:]}"]
+    # 5년 전 상장주식수(L20). 기준일은 분기말 거래일로 고정해 매일 새로 받는 일을 없앤다
+    qends = [d for i, d in enumerate(all_dates)
+             if d[4:6] in ("03", "06", "09", "12") and (i + 1 == len(all_dates) or all_dates[i + 1][:6] != d[:6])]
+    d5 = [d for d in qends if d <= f"{int(base[:4]) - 5}{base[4:]}"]
     if d5:
         s = pd.Series(dtype=float)
         for mk in ("KOSPI", "KOSDAQ"):
@@ -306,32 +385,20 @@ def collect(st, log=print, with_dart=True, base_date=None, on_base=None):
                 warnings.append(f"5년 전 주식수 실패: {e}")
         info["shares_5y"] = s.reindex(info.index) if len(s) else None
 
-    admin = set()
-    if base_date:  # 과거 시점의 관리종목 목록은 무료로 구할 수 없다 (현재 목록을 쓰면 미래 정보가 섞인다)
-        warnings.append("투자검증: 과거 관리종목 목록이 없어 K1은 기준일의 거래정지 여부만 확인합니다.")
-    else:
-        try:
-            import FinanceDataReader as fdr
-            adm = fdr.StockListing("KRX-ADMIN")
-            admin = set(adm["Symbol"].astype(str))
-            sources["관리종목"] = "KIND 관리종목 목록"
-        except Exception as e:
-            warnings.append(f"관리종목 목록 조회 실패(K1 일부 미확인): {e}")
-    fx = None
-    try:
-        import FinanceDataReader as fdr
-        b_dt = datetime.strptime(base, "%Y%m%d")
-        fx = fdr.DataReader("USD/KRW", (b_dt - timedelta(days=90)).strftime("%Y-%m-%d"), b_dt.strftime("%Y-%m-%d"))["Close"]
-    except Exception as e:
-        warnings.append(f"환율 조회 실패(S18 ④ 제외): {e}")
-
     fin = {}
     if with_dart and st.get("dart_key"):
         try:
             from . import dart
             log("DART 재무제표 수집 중 (첫 실행은 오래 걸립니다)…")
-            fin = dart.collect(st["dart_key"], list(info.index), base, log, strict=bool(base_date))
-            sources["재무"] = "OpenDART 다중회사 주요계정"
+            # 현금흐름표는 회사마다 따로 조회해야 하므로, 제외 필터(K7 거래대금·K8 시총·K9 스팩)에 걸리는 종목은 받지 않는다
+            ss = db.scoring_settings(st)
+            v20 = panel["value"].iloc[-20:].mean().reindex(info.index)
+            ok = ((info["mcap"] >= ss["k8_mcap_eok"] * 1e8) & (v20 >= ss["k7_value_eok"] * 1e8)
+                  & ~info["name"].astype(str).str.contains("스팩|SPAC", case=False))
+            cf_tickers = sorted(set(info.index[ok.fillna(False)]) | {h["ticker"] for h in db.holdings()})
+            fin = dart.collect(st["dart_key"], list(info.index), base, log, strict=bool(base_date),
+                               cf_tickers=cf_tickers, warnings=warnings)
+            sources["재무"] = "OpenDART 다중회사 주요계정 + 사업보고서 현금흐름표·차입금"
         except Exception as e:
             warnings.append(f"DART 재무 수집 실패: {e}")
     elif with_dart:

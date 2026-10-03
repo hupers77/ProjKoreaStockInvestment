@@ -589,6 +589,86 @@ def M15(t: Ctx):
     return Res(s, f"기관 3개월 순매수 {f(p,2)}% (시총 대비)", "구간표 적용")
 
 
+def _cf(t):
+    """DART 사업보고서 전체 재무제표에서 뽑은 현금흐름·차입금 (dart.collect_cf)."""
+    return (t.fin or {}).get("cf") or {}
+
+
+def _cf_years(t):
+    ys = _cf(t).get("years") or {}
+    return [dict(ys[y], year=int(y)) for y in sorted(ys, key=int)]
+
+
+def _ni_of(y):
+    return y.get("ni_owner") if y.get("ni_owner") is not None else y.get("ni")
+
+
+def _eok(x):
+    return f(x / EOK, 0) if is_num(x) else "-"
+
+
+def M17(t: Ctx):
+    if t.is_fin:
+        return NA("금융업 → 대손비용률로 대체(수동 입력)")
+    ys = [y for y in _cf_years(t) if y.get("ocf") is not None and _ni_of(y) is not None]
+    if not ys:
+        return NA("현금흐름표(DART) 없음")
+    y = ys[-1]
+    ocf, ni = y["ocf"], _ni_of(y)
+    val = f"{y['year']}년 영업현금흐름 {_eok(ocf)}억 ÷ 순이익 {_eok(ni)}억"
+    if ni > 0:
+        r = ocf / ni
+        val += f" = {f(r, 2)}배"
+        if ocf < 0: s, why = 0, "순이익은 흑자인데 영업현금흐름 마이너스"
+        elif r >= 1.3: s, why = 10, "1.3배 이상"
+        elif r >= 1.0: s, why = 8, "1.0~1.3배"
+        elif r >= 0.8: s, why = 6, "0.8~1.0배"
+        elif r >= 0.5: s, why = 4, "0.5~0.8배"
+        else: s, why = 2, "0~0.5배"
+    elif ocf > 0:
+        s, why = 4, "순이익은 적자이나 영업현금흐름 플러스"
+    else:
+        s, why = 0, "순이익·영업현금흐름 모두 적자"
+    return Res(s, val, why + " (최근 사업보고서 연간 기준)")
+
+
+def M21(t: Ctx):
+    if t.is_fin:
+        return NA("금융업 → 해당 없음(기준서 9장)")
+    cf = _cf(t)
+    bs = cf.get("bs") or {}
+    lb = (t.fin or {}).get("latest_bs") or {}
+    ca = lb.get("cur_assets") if lb.get("cur_assets") is not None else bs.get("cur_assets")
+    cl = lb.get("cur_liab") if lb.get("cur_liab") else bs.get("cur_liab")
+    if ca is None or not cl:
+        return NA("유동자산·유동부채(DART) 없음")
+    cr = ca / cl * 100
+    cr_s = 10 if cr >= 200 else 8 if cr >= 150 else 6 if cr >= 120 else 4 if cr >= 100 else 2
+    debt, cash = bs.get("debt"), bs.get("cash")
+    by = cf.get("bs_year")
+    last = next((y for y in _cf_years(t) if y["year"] == by), {})
+    op = last.get("op")
+    if op is None and by is not None:
+        op = (((t.fin or {}).get("annual") or {}).get(by) or {}).get("op")
+    if debt is None or cash is None or op is None:
+        return Res(cr_s, f"유동비율 {f(cr, 0)}%", "순차입금·EBITDA 자료 없음 → 유동비율만으로 추정", True)
+    dep = last.get("dep")
+    ebitda = op + (dep or 0)
+    nd = debt - cash
+    if nd <= 0:
+        lev_s, lev = 10, f"순현금 {_eok(-nd)}억"
+    elif ebitda <= 0:
+        lev_s, lev = 0, f"순차입금 {_eok(nd)}억, EBITDA 마이너스"
+    else:
+        x = nd / ebitda
+        lev_s = 8 if x < 1 else 6 if x < 2 else 4 if x < 3 else 2 if x <= 5 else 0
+        lev = f"순차입금/EBITDA {f(x, 1)}배"
+    why = "순차입금/EBITDA와 유동비율 중 낮은 구간"
+    if dep is None:
+        why += " / 감가상각비 없음 → 영업이익을 EBITDA로 사용"
+    return Res(min(cr_s, lev_s), f"{lev}, 유동비율 {f(cr, 0)}% (차입금·현금 {by}년말)", why, dep is None)
+
+
 # ───────────────────────── 장기 ─────────────────────────
 
 def _annual(t):
@@ -682,6 +762,35 @@ def L08(t: Ctx):
     dr = bs["liab"] / bs["equity"] * 100
     s = 10 if dr < 50 else 8 if dr < 100 else 6 if dr < 150 else 4 if dr < 200 else 2 if dr < 300 else 0
     return Res(s, f"부채비율 {f(dr,0)}%", "이자보상배율 미제공 → 부채비율만으로 추정", True)
+
+
+def L09(t: Ctx):
+    if t.is_fin:
+        return NA("금융업 → 해당 없음(기준서 9장)")
+    ys = [y for y in _cf_years(t) if y.get("ocf") is not None and y.get("capex") is not None][-5:]
+    if len(ys) < 3:
+        return NA("현금흐름표(DART) 3년 미만")
+    n = len(ys)
+    fcf = [y["ocf"] - y["capex"] for y in ys]
+    nis = [_ni_of(y) for y in ys]
+    cum_f, pos = sum(fcf), sum(1 for x in fcf if x > 0)
+    cum_n = sum(nis) if all(x is not None for x in nis) else None
+    conv = cum_f / cum_n * 100 if cum_n and cum_n > 0 else None
+    yld = fcf[-1] / t.mcap * 100 if t.mcap else None
+    val = (f"{ys[0]['year']}~{ys[-1]['year']} 누적 FCF {_eok(cum_f)}억, 전환율 {f(conv, 0)}%, "
+           f"최근 FCF 수익률 {f(yld)}%, FCF 플러스 {pos}/{n}년")
+    ok = lambda c, y: conv is not None and yld is not None and conv >= c and yld >= y
+    if cum_f < 0: s, why = 0, f"{n}년 누적 FCF 마이너스"
+    elif ok(90, 6): s, why = 10, "전환율 90%·수익률 6% 이상"
+    elif ok(70, 4): s, why = 8, "전환율 70%·수익률 4% 이상"
+    elif ok(50, 2): s, why = 6, "전환율 50%·수익률 2% 이상"
+    elif pos >= 3: s, why = 4, "FCF 플러스 3년 이상"
+    elif pos >= 1: s, why = 2, "FCF 플러스 1~2년"
+    else: s, why = 0, "FCF 플러스 연도 없음"
+    why += " / FCF = 영업현금흐름 − 유형·무형자산 취득"
+    if n < 5:
+        why += f" / {n}년 자료 → 추정"
+    return Res(s, val, why, n < 5)
 
 
 def L10(t: Ctx):
@@ -868,8 +977,9 @@ def knockouts(t: Ctx, st):
     name = str(t.info.get("name", ""))
     if t.tk in t.b.admin:
         out.append("K1 관리종목·거래정지")
-    if t.n and t.v.iloc[-1] == 0 and t.o.iloc[-1] == 0:
-        out.append("K1 매매거래정지(당일 거래 없음)")
+    vb = t.b.volume[t.tk].iloc[-1] if t.tk in t.b.volume.columns and len(t.b.volume) else None
+    if vb is None or not is_num(vb) or vb == 0:  # 기준일에 거래가 한 주도 없거나 시세 행이 없으면 거래정지로 본다
+        out.append("K1 매매거래정지(기준일 거래량 0)")
     if t.n >= 20:
         a = t.val.iloc[-20:].mean() / EOK
         if a < st["k7_value_eok"]:
@@ -942,10 +1052,13 @@ def score_ticker(t: Ctx, st, manual):
         m = manual.get(k)
         if m and m.get("score"):
             adj.append((k, label, pts, "수동"))
-    if "D4" not in manual and t.n >= 126:
+    d4_auto = False
+    if t.n >= 126:
         lo6 = t.l.iloc[-126:].min()
-        if lo6 > 0 and t.h.iloc[-126:].max() / lo6 >= 4:
-            adj.append(("D4", PENALTIES["D4"][0] + " (가격 기준 자동 판정)", PENALTIES["D4"][1], "자동"))
+        d4_auto = bool(lo6 > 0 and t.h.iloc[-126:].max() / lo6 >= 4)
+    # 수동 D4가 있으면(체크=1, 체크 해제=0) 자동 판정보다 우선한다
+    if "D4" not in manual and d4_auto:
+        adj.append(("D4", PENALTIES["D4"][0] + " (가격 기준 자동 판정)", PENALTIES["D4"][1], "자동"))
     pen = max(PENALTY_CAP, sum(a[2] for a in adj if a[2] < 0))
     bon = min(BONUS_CAP, sum(a[2] for a in adj if a[2] > 0))
     final = max(0.0, min(100.0, base + bon + pen))
@@ -979,7 +1092,7 @@ def score_ticker(t: Ctx, st, manual):
     core_vals = [r.score for r in core if r.score is not None]
     return {
         "items": items, "persp": persp, "cov": cov, "base": base, "bonus": bon, "penalty": pen,
-        "adj": adj, "final": final, "grade": grade, "grade_label": glabel, "gate": gate,
+        "adj": adj, "d4_auto": d4_auto, "final": final, "grade": grade, "grade_label": glabel, "gate": gate,
         "knockout": ko, "coverage": coverage, "reliability": reliability,
         "core_avg": float(np.mean(core_vals)) if core_vals else 0.0,
         "target": t.cache.get("target"), "stop": t.cache.get("stop"),

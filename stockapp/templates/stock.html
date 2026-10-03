@@ -67,7 +67,7 @@
 </div>
 
 <div class="row">
-  <div class="card" style="flex:2 1 500px"><h2>주가 (이동평균 20·60·120){% if bt %} <span class="muted small">· 세로 점선 = 기준일, 이후는 오늘까지 실제 흐름</span>{% endif %}</h2>
+  <div class="card" style="flex:2 1 500px"><h2>주가 (이동평균 20·60·120, 거래대금){% if bt %} <span class="muted small">· 세로 점선 = 기준일, 이후는 오늘까지 실제 흐름</span>{% endif %}</h2>
     {% if px_json == "[]" %}<p class="muted small">저장된 시세가 없습니다.</p>{% else %}<canvas id="px" height="110"></canvas>{% endif %}</div>
   <div class="card" style="flex:1 1 300px"><h2>점수 추이 <span class="muted small">· 기준일 1년 전부터{% if bt %}, 세로 점선 = 기준일{% endif %}</span></h2><canvas id="hist" height="160"></canvas></div>
 </div>
@@ -100,7 +100,7 @@
   {% if not bt %}
   <h3 style="font-size:14px;margin:16px 0 6px">가점·감점 (해당하면 체크)</h3>
   <div class="row small">
-    <div>{% for k, v in penalties.items() %}<label style="display:block"><input type="checkbox" class="madj" data-item="{{ k }}" {{ 'checked' if manual.get(k) and manual[k].score }}> {{ k }} {{ v[0] }} ({{ v[1] }})</label>{% endfor %}</div>
+    <div>{% for k, v in penalties.items() %}{% set auto = k == 'D4' and d4_auto %}<label style="display:block"><input type="checkbox" class="madj" data-item="{{ k }}" data-auto="{{ 1 if auto else 0 }}" {{ 'checked' if (manual.get(k) and manual[k].score) or (auto and k not in manual) }}> {{ k }} {{ v[0] }} ({{ v[1] }}){% if auto %} <span class="muted">· 가격 기준 자동 해당 (체크를 풀면 감점하지 않음)</span>{% endif %}</label>{% endfor %}</div>
     <div>{% for k, v in bonuses.items() %}<label style="display:block"><input type="checkbox" class="madj" data-item="{{ k }}" {{ 'checked' if manual.get(k) and manual[k].score }}> {{ k }} {{ v[0] }} (+{{ v[1] }})</label>{% endfor %}</div>
   </div>
   <div style="margin-top:12px"><button class="btn primary" onclick="saveManual()">수동 입력 저장</button> <a class="btn" href="{{ url_for('dashboard') }}" onclick="return goBack()">돌아가기</a> <span id="msave" class="small muted"></span></div>
@@ -138,14 +138,24 @@ function ma(arr, n) { return arr.map((_, i) => i < n - 1 ? null : arr.slice(i - 
 if (PX.length && window.Chart) {
   const all = PX.concat(AFTER);  // 기준일 이후도 같은 선으로 이어 그린다
   const c = all.map(x => x.close), lab = all.map(x => x.date.slice(2));
+  const val = all.map(x => (x.value || 0) / 1e8), vmax = Math.max(1, ...val);  // 거래대금(억 원)
+  const eok = v => v >= 100 ? Math.round(v).toLocaleString() : v.toFixed(1);
   const ds = [{label: '종가', data: c, borderColor: '#16a34a', backgroundColor: '#16a34a', borderWidth: 2.5, pointRadius: 0},
     {label: '20일', data: ma(c, 20), borderColor: '#e07b00', borderWidth: 1, pointRadius: 0},
     {label: '60일', data: ma(c, 60), borderColor: '#2457c5', borderWidth: 1, pointRadius: 0},
     {label: '120일', data: ma(c, 120), borderColor: '#7a3ec8', borderWidth: 1, pointRadius: 0}];
   if (TARGET) ds.push({label: '목표가', data: c.map(() => TARGET), borderColor: '#d43c3c', borderDash: [5, 4], borderWidth: 1, pointRadius: 0});
   if (STOP) ds.push({label: '손절가', data: c.map(() => STOP), borderColor: '#2a62d6', borderDash: [5, 4], borderWidth: 1, pointRadius: 0});
+  // 거래대금: 막대, 오른쪽 축(억 원). 아래쪽 3분의 1만 차지하도록 축 최대값을 키우고 선 뒤에 그린다
+  ds.push({type: 'bar', label: '거래대금(억)', data: val, yAxisID: 'y1', order: 10, backgroundColor: 'rgba(110,110,110,0.30)',
+    borderWidth: 0, barPercentage: 1, categoryPercentage: 1});
   new Chart(document.getElementById('px'), {type: 'line', data: {labels: lab, datasets: ds}, plugins: [baseLine(PX.length - 1)],
-    options: {animation: false, interaction: {mode: 'index', intersect: false}, plugins: {legend: {labels: {boxWidth: 12}}}, scales: {x: {ticks: {maxTicksLimit: 10}}}}});
+    options: {animation: false, interaction: {mode: 'index', intersect: false},
+      plugins: {legend: {labels: {boxWidth: 12}}, tooltip: {callbacks: {label: t => t.dataset.yAxisID === 'y1'
+        ? `거래대금 ${eok(t.raw)}억` : (t.raw == null ? '' : `${t.dataset.label} ${Math.round(t.raw).toLocaleString()}`)}}},
+      scales: {x: {ticks: {maxTicksLimit: 10}}, y: {position: 'left'},
+        y1: {position: 'right', min: 0, max: vmax * 3, grid: {drawOnChartArea: false},
+          title: {display: true, text: '거래대금(억 원)'}, ticks: {maxTicksLimit: 5, callback: v => v > vmax ? '' : v === 0 ? '0' : eok(v)}}}}});
 }
 if (window.Chart) new Chart(document.getElementById('hist'), {type: 'line', plugins: [baseLine(HIST.findIndex(h => h.base_date >= BASE))],
   data: {labels: HIST.map(h => (h.base_date || '').slice(2)),
@@ -162,7 +172,9 @@ async function saveManual() {
     let v = el.value === '' ? null : Math.max(0, Math.min(10, Number(el.value)));
     items.push({item: el.dataset.item, score: v, note});
   });
-  document.querySelectorAll('input.madj').forEach(el => items.push({item: el.dataset.item, score: el.checked ? 1 : null}));
+  // 자동 판정(D4)이 걸린 항목: 체크 유지 = 자동 판정 그대로(수동 값 없음), 체크 해제 = 0으로 저장해 감점 끄기
+  document.querySelectorAll('input.madj').forEach(el => items.push({item: el.dataset.item,
+    score: el.dataset.auto === '1' ? (el.checked ? null : 0) : (el.checked ? 1 : null)}));
   const j = await postJSON('/api/manual', {ticker: '{{ r.ticker }}', items});
   document.getElementById('msave').textContent = j.rescored ? '저장하고 다시 계산했습니다.' : '저장했습니다. 다음 스캔에 반영됩니다.';
   if (j.rescored) setTimeout(() => location.reload(), 600);

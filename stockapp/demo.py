@@ -36,6 +36,11 @@ def full_close(n=300, seed=7):
     return _paths(n, seed)[3]
 
 
+def full_value(n=300, seed=7):
+    """오늘까지의 가상 거래대금 전체 (종목 상세 차트용)."""
+    return _paths(n, seed)[8]
+
+
 def make_bundle(n=300, days=300, seed=7, base_date=None):
     rng, dates, tickers, close, high, low, opn, volume, value, shares = _paths(n, seed)
     full = close
@@ -87,7 +92,18 @@ def make_bundle(n=300, days=300, seed=7, base_date=None):
             op = rv * (opm + rng.normal(0, 0.02))
             annual[y] = {"rev": rv, "op": op, "ni": op * 0.75, "equity": eq * (1 + 0.05 * (y - y0)),
                          "liab": eq * rng.uniform(0.2, 2.5), "capital": eq * 0.1}
-        fin[tk] = {"quarters": qs[:7], "annual": annual, "latest_bs": annual[y0 - 1]}
+        cf_years = {}
+        for y, a in annual.items():
+            capex = a["rev"] * rng.uniform(0.02, 0.12)
+            cf_years[y] = {"op": a["op"], "ni": a["ni"], "ni_owner": a["ni"] * 0.95, "ocf": a["ni"] * rng.uniform(-0.2, 1.8),
+                           "capex": capex, "dep": capex * rng.uniform(0.6, 1.2)}
+        last = annual[y0 - 1]
+        bs = {"cash": eq * rng.uniform(0.05, 0.6), "debt": eq * rng.uniform(0, 1.2),
+              "cur_assets": eq * rng.uniform(0.5, 1.5)}
+        bs["cur_liab"] = bs["cur_assets"] / rng.uniform(0.7, 2.6)
+        last.update(cur_assets=bs["cur_assets"], cur_liab=bs["cur_liab"])
+        fin[tk] = {"quarters": qs[:7], "annual": annual, "latest_bs": last,
+                   "cf": {"years": cf_years, "bs": bs, "bs_year": y0 - 1, "fs": "CFS"}}
     dps_hist = pd.DataFrame({y: info["dps"] * rng.uniform(0.7, 1.05, n) for y in range(y0 - 5, y0)}, index=tickers)
     pbr_hist = pd.DataFrame({f"s{k}": info["pbr"] * rng.uniform(0.6, 1.5, n) for k in range(20)}, index=tickers)
     fx = pd.Series(1350 + np.cumsum(rng.normal(0, 3, 60)), index=dates[-60:])
