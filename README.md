@@ -368,6 +368,7 @@ stockapp/demo.py         화면 확인용 가상 데이터
 stockapp/templates/      화면 HTML
 stockapp/static/         스타일·아이콘
 docs/                    평가 기준서, 화면 캡처
+docs/standards/          개발 회고와 경제 프로그램 개발 표준 (프롬프트·계획·설계·UI·개발·테스트·운영·금융 도메인)
 ```
 
 이 프로그램의 점수는 의사결정 보조 자료이며 손실이 없음을 보장하지 않습니다. 최종 투자 판단과 책임은 사용자에게 있습니다.
