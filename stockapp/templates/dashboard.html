@@ -40,6 +40,16 @@
 </div>
 {% endif %}
 
+{% if scan %}
+<div class="card {{ 'bottom-on' if bottom.share >= 30 }}">
+  <h2>저점 신호 <span class="sig low">저점 후보 {{ bottom.n }} / {{ bottom.of }}종목 ({{ bottom.share|num(1) }}%)</span>
+    <button class="btn small" style="margin-left:8px" onclick="pickSignal('low')">저점 후보 보기</button></h2>
+  {% if bottom.share >= 30 %}<div class="small"><b>시장 바닥권 가능.</b> 투자 대상 종목의 30% 이상이 동시에 저점 후보입니다. 백테스트에서 이런 날(2026-07-08, 07-20, 07-28~30)은 이후 5일 시장 평균 +9.6%였지만 날짜가 5일뿐이라 참고용입니다.</div>
+  {% elif bottom.share >= 20 %}<div class="small">저점 후보가 20~30%입니다. 아직 바닥 신호로 보기 어렵습니다. 백테스트에서 이런 날(5일)은 이후 5일 시장 평균 −2.2%로, 하락이 이어지는 중인 경우가 많았습니다.</div>
+  {% else %}<div class="small muted">저점 후보 = 볼린저 하단까지 눌림(S06 ≤ 2) + 5일 −5% 이상 하락 + 외국인 매도(S09 ≤ 1) 또는 업종 약세(S17 ≤ 1). 백테스트 5일 평균 +2~5%, 승률 54~59%, 10일 안 평균 최대 손실 약 −11%라 손절 기준이 필요합니다. 30% 이상이면 시장 바닥권 신호로 표시합니다.</div>{% endif %}
+</div>
+{% endif %}
+
 <div class="card">
   <h2>보유 종목 ({{ hold_rows|length }})</h2>
   {% if not hold_rows %}<p class="muted small">표에서 종목명 왼쪽 라디오 버튼을 누르거나 ‘보유·제외 종목’ 메뉴에서 등록하세요.</p>{% else %}
@@ -70,6 +80,7 @@
   <div class="legend" style="margin-bottom:8px">종목명 배경색:
     {% for g in ['S','A','B','C','X'] %}<span class="name g-{{g}}">{{ grade_info[g][0] }} {{ grade_info[g][2] }}</span>{% endfor %}
     <span class="muted">· 왼쪽 라디오 = 보유 여부(누르면 등록/해제)</span>
+    <span class="sig low">저점</span><span class="muted">저점 후보</span><span class="sig warn">⚠</span><span class="muted">추격 주의 경고(마우스를 올리면 이유)</span>
   </div>
   <div class="filters">
     <input type="text" id="q" placeholder="종목명·코드 검색" oninput="render(1)">
@@ -77,6 +88,7 @@
       {% for g in ['S','A','B','C','X'] %}<option value="{{g}}">{{ grade_info[g][0] }}</option>{% endfor %}</select>
     <select id="fm" onchange="render(1)"><option value="">전체 시장</option><option>KOSPI</option><option>KOSDAQ</option></select>
     <select id="fs" onchange="render(1)"><option value="">전체 업종</option></select>
+    <select id="fsig" onchange="render(1)"><option value="">전체 신호</option><option value="low">저점 후보만</option><option value="warn">경고만</option><option value="none">경고 없는 종목</option></select>
     <label class="small"><input type="checkbox" id="fh" onchange="render(1)"> 보유만</label>
     <span class="muted small" id="cnt"></span>
     <span style="margin-left:auto" class="small">내려받기
@@ -116,7 +128,7 @@ const FKEY = 'rankFilters.v1';
 function saveFilters() {
   try {
     localStorage.setItem(FKEY, JSON.stringify({q: document.getElementById('q').value, g: document.getElementById('fg').value,
-      m: document.getElementById('fm').value, s: fs.value, h: document.getElementById('fh').checked, sortK, sortDir, page}));
+      m: document.getElementById('fm').value, s: fs.value, sig: document.getElementById('fsig').value, h: document.getElementById('fh').checked, sortK, sortDir, page}));
   } catch (e) {}
 }
 function loadFilters() {
@@ -127,6 +139,7 @@ function loadFilters() {
   document.getElementById('fg').value = f.g || '';
   document.getElementById('fm').value = f.m || '';
   if (f.s && secs.includes(f.s)) fs.value = f.s;
+  document.getElementById('fsig').value = f.sig || '';
   document.getElementById('fh').checked = !!f.h;
   if (f.sortK) { sortK = f.sortK; sortDir = f.sortDir || -1; }
   document.querySelectorAll('#tbl th[data-k]').forEach(x => {
@@ -137,7 +150,7 @@ function loadFilters() {
 }
 function resetFilters() {
   ['q', 'fm'].forEach(id => document.getElementById(id).value = '');
-  document.getElementById('fg').value = ''; fs.value = ''; document.getElementById('fh').checked = false;
+  document.getElementById('fg').value = ''; fs.value = ''; document.getElementById('fsig').value = ''; document.getElementById('fh').checked = false;
   sortK = 'f'; sortDir = -1;
   document.querySelectorAll('#tbl th[data-k]').forEach(x => {
     x.textContent = x.textContent.replace(/ [▲▼]$/, '') + (x.dataset.k === 'f' ? ' ▼' : '');
@@ -149,11 +162,22 @@ function pickGrade(g) {
   render(1);
   document.getElementById('ranking').scrollIntoView({behavior: 'smooth'});
 }
+function pickSignal(k) {
+  document.getElementById('fsig').value = k;
+  render(1);
+  document.getElementById('ranking').scrollIntoView({behavior: 'smooth'});
+}
+const hasSig = (r, k) => (r.fl || []).some(x => x[0] === k);
+function sigFilter(r, k) { return !k || (k === 'none' ? !hasSig(r, 'warn') : hasSig(r, k)); }
+function sigHtml(r) {
+  return (r.fl || []).map(x => x[0] === 'low' ? `<span class="sig low" title="${esc(x[1])}">저점</span>`
+    : `<span class="sig warn" title="${esc(x[1])}">⚠</span>`).join('');
+}
 function filtered() {
   const q = document.getElementById('q').value.trim().toLowerCase();
   const g = document.getElementById('fg').value, m = document.getElementById('fm').value, s = fs.value;
-  const h = document.getElementById('fh').checked;
-  return ROWS.filter(r => (!q || r.n.toLowerCase().includes(q) || r.t.includes(q)) && (!g || g.includes(r.g))
+  const h = document.getElementById('fh').checked, sg = document.getElementById('fsig').value;
+  return ROWS.filter(r => sigFilter(r, sg)).filter(r => (!q || r.n.toLowerCase().includes(q) || r.t.includes(q)) && (!g || g.includes(r.g))
     && (!m || r.m === m) && (!s || r.sec === s) && (!h || r.h));
 }
 let CURRENT = [];
@@ -166,6 +190,7 @@ async function exportRows(fmt) {
   if (g.value) parts.push('등급 ' + g.options[g.selectedIndex].text);
   if (m.value) parts.push('시장 ' + m.value);
   if (fs.value) parts.push('업종 ' + fs.value);
+  const sg = document.getElementById('fsig'); if (sg.value) parts.push(sg.options[sg.selectedIndex].text);
   if (document.getElementById('fh').checked) parts.push('보유만');
   const r = await fetch('/api/export', {method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({fmt, tickers: CURRENT.map(x => x.t), desc: parts.join(', ')})});
@@ -197,7 +222,7 @@ function render(p) {
   document.querySelector('#tbl tbody').innerHTML = rows.slice((page-1)*PER, page*PER).map(r => `
     <tr>
       <td class="l"><input type="radio" class="hold" data-t="${r.t}" data-n="${esc(r.n)}" ${r.h ? 'checked' : ''}></td>
-      <td class="l"><a href="/stock/${r.t}"><span class="name g-${r.g}">${esc(r.n)}</span></a> <span class="muted small">${r.t} · ${r.m}</span></td>
+      <td class="l"><a href="/stock/${r.t}"><span class="name g-${r.g}">${esc(r.n)}</span></a>${sigHtml(r)} <span class="muted small">${r.t} · ${r.m}</span></td>
       <td class="l small">${esc(r.sec || '')}</td>
       <td><span class="badge g-${r.g}" style="text-decoration:none">${GL[r.g]}</span></td>
       <td><b>${fmt(r.f, 1)}</b></td>
@@ -205,7 +230,7 @@ function render(p) {
       <td>${fmt(r.s, 1)}</td><td>${fmt(r.mi, 1)}</td><td>${fmt(r.l, 1)}</td>
       <td>${fmt(r.cov * 100)}%</td><td>${fmt(r.c)}</td>
       <td class="${r.chg > 0 ? 'up' : r.chg < 0 ? 'down' : ''}">${fmt(r.chg, 2)}%</td><td>${fmt(r.cap)}</td>
-      <td class="l small">${r.ko ? '<span class="alert">' + esc(r.ko) + '</span>' : esc(r.gate || '')}</td>
+      <td class="l small">${r.ko ? '<span class="alert">' + esc(r.ko) + '</span>' : esc(r.gate || '')}${(r.fl || []).map(x => '<div class="' + (x[0] === 'warn' ? 'alert' : '') + '">' + esc(x[1]) + '</div>').join('')}</td>
     </tr>`).join('');
 }
 window.onHoldChanged = (t, held) => { ROWS.forEach(r => { if (r.t === t) r.h = held; }); };

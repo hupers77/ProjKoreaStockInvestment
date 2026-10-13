@@ -6,8 +6,8 @@ import pandas as pd
 from . import db
 
 # 프로파일별 기본 검증 기간 (기준일 = 오늘 - 기간)
-DEFAULT_OFFSET = {"U": {"days": 10}, "A": {"months": 2}, "B": {"months": 4}, "C": {"months": 6}, "D": {"months": 9}}
-OFFSET_LABEL = {"U": "10일 전", "A": "2개월 전", "B": "4개월 전", "C": "6개월 전", "D": "9개월 전"}
+DEFAULT_OFFSET = {"U": {"days": 10}, "L": {"days": 10}, "A": {"months": 2}, "B": {"months": 4}, "C": {"months": 6}, "D": {"months": 9}}
+OFFSET_LABEL = {"U": "10일 전", "L": "10일 전", "A": "2개월 전", "B": "4개월 전", "C": "6개월 전", "D": "9개월 전"}
 
 _cache = {}
 

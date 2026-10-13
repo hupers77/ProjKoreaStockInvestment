@@ -11,7 +11,7 @@ import pandas as pd
 
 from . import indicators as ind
 from .bundle import Bundle
-from .framework import (BONUS_CAP, BONUSES, ITEM_MAP, ITEMS, PENALTIES, PENALTY_CAP,
+from .framework import (BONUS_CAP, BONUSES, ITEM_MAP, ITEMS, LOW_MAP, PENALTIES, PENALTY_CAP,
                         PERSPECTIVES, PROFILES, grade_of)
 
 EOK = 1e8  # 1억 원
@@ -1026,6 +1026,14 @@ def score_ticker(t: Ctx, st, manual):
 
     W = st.get("weights") or {}
     wt = lambda iid: float(W.get(iid, ITEM_MAP[iid]["weight"]))  # 프로파일별 사용자 가중치 (없으면 권장값)
+    prof = PROFILES.get(st["profile"], PROFILES["C"])
+    # 저점 매수(L) 프로파일은 항목 점수를 변환표로 바꿔 합산한다 (화면의 항목 점수는 원점수 그대로)
+    low = {}
+    if prof.get("low"):
+        for iid, (fn, _) in LOW_MAP.items():
+            if items[iid].score is not None:
+                low[iid] = float(fn(items[iid].score))
+    eff = lambda iid: low.get(iid, items[iid].score)
     persp, cov = {}, {}
     for p in PERSPECTIVES:
         num = den = tot = 0
@@ -1034,14 +1042,13 @@ def score_ticker(t: Ctx, st, manual):
                 continue
             w = wt(iid)
             tot += w
-            r = items[iid]
-            if r.score is not None and w > 0:
-                num += r.score * w
+            sc = eff(iid)
+            if sc is not None and w > 0:
+                num += sc * w
                 den += w
         persp[p] = num / den * 10 if den else None
         cov[p] = den / tot if tot else 0
 
-    prof = PROFILES.get(st["profile"], PROFILES["C"])
     wsum = sum(prof[p] for p in PERSPECTIVES if persp[p] is not None)
     base = sum(persp[p] * prof[p] for p in PERSPECTIVES if persp[p] is not None) / wsum if wsum else 0
     coverage = sum(cov[p] * prof[p] for p in PERSPECTIVES)
@@ -1065,7 +1072,7 @@ def score_ticker(t: Ctx, st, manual):
 
     # 등급 게이트
     ko = knockouts(t, st)
-    core = [items[i] for i, m in ITEM_MAP.items() if m["core"] and wt(i) > 0]
+    core = [Res(eff(i)) for i, m in ITEM_MAP.items() if m["core"] and wt(i) > 0]
     gate = []
     if final >= 90:
         reasons = []
@@ -1096,8 +1103,30 @@ def score_ticker(t: Ctx, st, manual):
         "knockout": ko, "coverage": coverage, "reliability": reliability,
         "core_avg": float(np.mean(core_vals)) if core_vals else 0.0,
         "target": t.cache.get("target"), "stop": t.cache.get("stop"),
-        "weights": {i: wt(i) for i in ITEM_MAP},
+        "weights": {i: wt(i) for i in ITEM_MAP}, "low": low, "flags": signal_flags(t, items),
     }
+
+
+def signal_flags(t: Ctx, items):
+    """프로파일과 무관한 매매 신호 표시 [(종류, 문구)]. 종류: low = 저점 후보, warn = 경고.
+    근거: docs/backtest/U초단기_저점진입_백테스트_20261014.md (다음날 시가 매수, 비용 0.3% 차감)"""
+    sc = lambda i: items[i].score
+    r5 = ind.ret(t.c, 5) if t.n > 5 else None
+    out = []
+    s06, s09, s17, s19 = sc("S06"), sc("S09"), sc("S17"), sc("S19")
+    # 볼린저 하단까지 눌림 + 5일 -5% 이상 하락 + 외국인 투매 또는 업종 약세 → 5일 평균 +2~5%, 승률 54~59%
+    if s06 is not None and s06 <= 2 and r5 is not None and r5 <= -5 and \
+            ((s09 is not None and s09 <= 1) or (s17 is not None and s17 <= 1)):
+        why = "외국인 매도" if s09 is not None and s09 <= 1 else "업종 약세"
+        out.append(("low", f"저점 후보 (볼린저 하단·5일 {r5:+.1f}%·{why})"))
+    # 추격 매수 경고: 5일 평균 -2~-6%, 승률 28~42%
+    if r5 is not None and r5 >= 10:
+        out.append(("warn", f"5일 {r5:+.1f}% 급등, 추격 주의"))
+    elif r5 is not None and r5 >= 5 and s19 is not None and s19 >= 10:
+        out.append(("warn", "상승 중 손익비 10점, 추격 주의"))
+    if s06 is not None and s06 >= 10:
+        out.append(("warn", "밴드 상단 돌파 직후, 되밀림 주의"))
+    return out
 
 
 def score_universe(b: Bundle, st, holdings=(), exclusions=(), manual=None, progress=None):

@@ -10,7 +10,7 @@ from urllib.parse import quote
 from flask import Flask, Response, abort, jsonify, redirect, render_template, request, url_for
 
 from . import db, scanner
-from .framework import BONUSES, ITEM_MAP, ITEMS, KNOCKOUTS, PENALTIES, PERSPECTIVES, PROFILES
+from .framework import BONUSES, ITEM_MAP, ITEMS, KNOCKOUTS, LOW_MAP, PENALTIES, PERSPECTIVES, PROFILES
 
 app = Flask(__name__)
 sched = BackgroundScheduler(timezone="Asia/Seoul")
@@ -92,6 +92,19 @@ def dashboard():
         warnings = json.loads(scan["warnings"] or "[]")
     holds = {h["ticker"]: h for h in db.holdings()}
     excl = {e["ticker"] for e in db.exclusions()}
+    # 5거래일 전 점수 (같은 프로파일). 5일 사이 +10점 이상 오른 종목은 이후 5일 평균 -2.1% (백테스트)
+    p5 = db.scan_days_ago(scan["base_date"], 5, scan["profile"]) if scan and scan["base_date"] else None
+    map5 = {x["ticker"]: x["final"] for x in db.scores(p5["id"])} if p5 else {}
+    for r in rows:
+        fl = list(r.get("flags") or [])
+        v5 = map5.get(r["ticker"])
+        if v5 is not None and r["final"] - v5 >= 10:
+            fl.append(("warn", f"점수 5일 {r['final'] - v5:+.1f} 급상승, 추격 주의"))
+        r["flags"] = fl
+    # 시장 바닥권 신호: 제외 필터를 통과한 종목 중 저점 후보 비율 (30% 이상이던 날 이후 5일 시장 평균 +9.6%)
+    elig = [r for r in rows if r["grade"] != "X"]
+    n_low = sum(1 for r in elig if any(k == "low" for k, _ in r["flags"]))
+    bottom = {"n": n_low, "of": len(elig), "share": n_low / len(elig) * 100 if elig else 0}
     slim = []
     for r in rows:
         prev = prev_map.get(r["ticker"])
@@ -99,7 +112,7 @@ def dashboard():
             "t": r["ticker"], "n": r["name"], "m": r["market"], "sec": r["sector"], "c": r["close"], "chg": r["chg"],
             "cap": (r["mcap"] or 0) / 1e8, "s": r["s_short"], "mi": r["s_mid"], "l": r["s_long"], "f": r["final"],
             "g": r["grade"], "cov": r["coverage"], "d": None if prev is None else r["final"] - prev,
-            "ko": r["knockout"], "gate": r["gate"], "h": r["ticker"] in holds,
+            "ko": r["knockout"], "gate": r["gate"], "h": r["ticker"] in holds, "fl": r["flags"],
         })
     counts = {g: sum(1 for r in rows if r["grade"] == g) for g in GRADE_INFO}
     hold_rows = []
@@ -115,11 +128,12 @@ def dashboard():
             pv = prev_map.get(tk)
             if pv is not None and r["final"] - pv <= -5:
                 alerts.append(f"점수 {r['final'] - pv:+.1f} 급락")
+            alerts += [txt for k, txt in r["flags"] if k == "warn"]
         ret = ((r["close"] / h["buy_price"] - 1) * 100) if r and h.get("buy_price") else None
         hold_rows.append({"h": h, "r": r, "ret": ret, "alerts": alerts,
                           "d": (r["final"] - prev_map[tk]) if r and tk in prev_map else None})
     return render_template("dashboard.html", scan=scan, last=last, rows_json=json.dumps(slim, ensure_ascii=False),
-                           counts=counts, env=env, warnings=warnings, hold_rows=hold_rows, n_excl=len(excl),
+                           counts=counts, env=env, warnings=warnings, hold_rows=hold_rows, n_excl=len(excl), bottom=bottom,
                            st=db.settings())
 
 
@@ -347,14 +361,14 @@ def criteria():
     if request.method == "POST":
         f = request.form
         d = {}
-        for iid, meta in ITEM_MAP.items():
+        for iid in ITEM_MAP:
             v = f.get(f"w.{iid}", "").strip()
             if f.get("reset"):
-                v = meta["weight"]
+                v = db.default_weight(p, iid)
             try:
                 d[f"p{p}.w.{iid}"] = max(0.0, min(50.0, float(v)))
             except ValueError:
-                d[f"p{p}.w.{iid}"] = meta["weight"]
+                d[f"p{p}.w.{iid}"] = db.default_weight(p, iid)
         d["scoring_changed_at"] = db.now()
         db.save_raw_settings(d)
         return redirect(url_for("criteria", p=p, saved=1))
@@ -363,7 +377,8 @@ def criteria():
     auto = set(RULES) - set(DISABLED)
     return render_template("criteria.html", groups=groups, auto=auto, disabled=DISABLED, knockouts=KNOCKOUTS,
                            penalties=PENALTIES, bonuses=BONUSES, p=p, active=st["profile"],
-                           weights=db.profile_weights(p, st), saved=request.args.get("saved"))
+                           weights=db.profile_weights(p, st), saved=request.args.get("saved"),
+                           std={i: db.default_weight(p, i) for i in ITEM_MAP}, low_map=LOW_MAP if PROFILES[p].get("low") else {})
 
 
 @app.route("/settings", methods=["GET", "POST"])
