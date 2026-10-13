@@ -1,0 +1,10 @@
+import pandas as pd, numpy as np
+pd.set_option('display.width',300); pd.set_option('display.max_colwidth',60)
+b=pd.read_pickle('base.pkl')
+m=(b.S06<=2)&(b.d5<=-5)&((b.S09<=1)|(b.S17<=1)); r=b[m&b.f10.notna()].copy()
+day=r.groupby('date').agg(n=('f5','size'),f1=('f1','mean'),f3=('f3','mean'),f5=('f5','mean'),f10=('f10','mean'),w5=('f5',lambda x:(x>0).mean()*100),mae5=('mae5','mean'))
+allday=b.groupby('date').agg(N=('f5','size'),allf5=('f5','mean'))
+day=day.join(allday)
+print(day[day.n>=5].sort_values('f5',ascending=False).round(2).head(15).to_string())
+print(day[day.n>=5].sort_values('f5').round(2).head(6).to_string())
+day.to_pickle('r5_days.pkl'); r.to_pickle('r5_hits.pkl')

@@ -15,7 +15,12 @@
     {% for k, pr in profiles.items() %}<a class="btn {{ 'primary' if k==p }}" href="{{ url_for('criteria', p=k) }}">{{ pr.name.split(' (')[0] }}{% if k==active %} ✓{% endif %}</a>{% endfor %}
     <span class="small muted">✓ = 설정에서 적용 중인 프로파일</span>
   </div>
-  <p class="small muted" style="margin-bottom:0">왼쪽 ‘권장’은 기준서의 표준 가중치, 오른쪽 ‘가중치’는 이 프로파일에서 쓸 값입니다. 0으로 두면 그 항목은 점수에서 빠집니다. 관점별 합계가 100이 아니어도 계산은 되지만(적용된 가중치로 환산) 기준서처럼 100으로 맞추는 것을 권장합니다.</p>
+  <p class="small muted" style="margin-bottom:0">왼쪽 ‘권장’은 이 프로파일의 권장 가중치(U·L은 백테스트 기준, 나머지는 기준서 표준), 오른쪽 ‘가중치’는 이 프로파일에서 쓸 값입니다. 0으로 두면 그 항목은 점수에서 빠집니다. 관점별 합계가 100이 아니어도 계산은 되지만(적용된 가중치로 환산) 기준서처럼 100으로 맞추는 것을 권장합니다.</p>
+  {% if low_map %}
+  <div class="small" style="margin-top:10px"><b>L. 저점 매수 계산 방식</b> · 아래 단기 항목의 원점수를 ‘눌림·투매’일수록 높게 바꾼 뒤 가중 평균합니다(중기·장기 0%). 종목 상세 화면의 항목 점수는 원점수 그대로 보입니다.
+    80점 이상(A 등급)은 백테스트(2026-02~09, 다음날 시가 매수·비용 0.3%)에서 5일 평균 상승기 +1.9%, 하락기 +4.7%였지만 10일 안 평균 최대 손실이 −10% 안팎이라 손절 기준이 필요합니다.
+    <ul style="margin:6px 0 0;padding-left:18px">{% for iid, m in low_map.items() %}<li>{{ iid }} {{ groups['단기']|selectattr('id','equalto',iid)|map(attribute='name')|first }}: {{ m[1] }}</li>{% endfor %}</ul></div>
+  {% endif %}
 </div>
 <div class="row">
   {% for g, items in groups.items() %}
@@ -23,10 +28,10 @@
     <tr><th class="l">ID</th><th class="l">항목</th><th>권장</th><th>가중치</th><th class="l">입력</th></tr>
     {% for it in items %}<tr>
       <td class="l">{{ it.id }}{{ ' ★' if it.core }}</td><td class="l">{{ it.name }}</td>
-      <td class="muted">{{ it.weight }}</td>
-      <td><input type="number" min="0" max="50" step="1" name="w.{{ it.id }}" data-g="{{ g }}" data-std="{{ it.weight }}" class="wt" value="{{ weights[it.id]|num }}" style="width:62px"></td>
+      <td class="muted">{{ std[it.id]|num }}</td>
+      <td><input type="number" min="0" max="50" step="1" name="w.{{ it.id }}" data-g="{{ g }}" data-std="{{ std[it.id] }}" class="wt" value="{{ weights[it.id]|num }}" style="width:62px"></td>
       <td class="l">{% if it.id in disabled %}<span class="badge g-X" style="text-decoration:none">제외</span>{% elif it.id in auto %}<span class="badge g-A">자동</span>{% else %}<span class="badge g-C">수동</span>{% endif %}</td></tr>{% endfor %}
-    <tr><td></td><td class="l muted small">합계</td><td class="muted">100</td><td><b class="wsum" data-g="{{ g }}"></b></td><td></td></tr>
+    <tr><td></td><td class="l muted small">합계</td><td class="muted">{% set ns = namespace(t=0) %}{% for it in items %}{% set ns.t = ns.t + std[it.id] %}{% endfor %}{{ ns.t|num }}</td><td><b class="wsum" data-g="{{ g }}"></b></td><td></td></tr>
   </table></div>
   {% endfor %}
 </div>

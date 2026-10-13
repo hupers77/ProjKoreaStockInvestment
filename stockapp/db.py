@@ -74,6 +74,8 @@ def init():
             c.execute("ALTER TABLE scans ADD COLUMN kind TEXT DEFAULT 'live'")
         if "req_date" not in cols:  # 투자검증에서 사용자가 고른 기준일 (실제 기준일은 그 이전 마지막 거래일)
             c.execute("ALTER TABLE scans ADD COLUMN req_date TEXT")
+        if "flags" not in {r[1] for r in c.execute("PRAGMA table_info(scores)")}:  # 저점 후보·경고 표시 (JSON)
+            c.execute("ALTER TABLE scores ADD COLUMN flags TEXT")
         if "code" not in cols:  # 사람이 보는 스캔 번호 'yymmdd-001' (날짜별 일련번호, 중복 없음)
             c.execute("ALTER TABLE scans ADD COLUMN code TEXT")
         seq = {}
@@ -107,7 +109,7 @@ def settings():
 
 
 CRITERIA_KEYS = ("k7_value_eok", "k8_mcap_eok", "gate_s_cov", "gate_a_cov")
-PROFILE_KEYS = ("U", "A", "B", "C", "D")  # U = 초단기
+PROFILE_KEYS = ("U", "L", "A", "B", "C", "D")  # U = 초단기, L = 저점 매수
 
 
 def profile_criteria(st=None):
@@ -119,17 +121,26 @@ def profile_criteria(st=None):
     return out
 
 
+def default_weight(p, iid):
+    """프로파일 권장 가중치. L(저점 매수)은 변환표에 있는 항목만 쓰고 나머지는 0."""
+    from .framework import ITEM_MAP, PROFILE_WEIGHTS, PROFILES
+    pw = PROFILE_WEIGHTS.get(p, {})
+    if iid in pw:
+        return float(pw[iid])
+    return 0.0 if PROFILES.get(p, {}).get("low") else float(ITEM_MAP[iid]["weight"])
+
+
 def profile_weights(p, st=None):
     """프로파일별 사용자 가중치 {항목ID: 가중치}. 저장 안 된 항목은 권장값."""
     from .framework import ITEM_MAP
     st = st or settings()
     out = {}
-    for iid, meta in ITEM_MAP.items():
+    for iid in ITEM_MAP:
         v = st.get(f"p{p}.w.{iid}")
         try:
-            out[iid] = float(v) if v not in (None, "") else float(meta["weight"])
+            out[iid] = float(v) if v not in (None, "") else default_weight(p, iid)
         except ValueError:
-            out[iid] = float(meta["weight"])
+            out[iid] = default_weight(p, iid)
     return out
 
 
@@ -305,6 +316,18 @@ def prev_scan(scan_id):
     return dict(r) if r else None
 
 
+def scan_days_ago(base_date, n, profile):
+    """base_date보다 n거래일 앞선 날의 같은 프로파일 완료 스캔 (정기·투자검증 모두, 없으면 None)."""
+    with conn() as c:
+        d = c.execute("SELECT date FROM price_days WHERE date<? ORDER BY date DESC LIMIT 1 OFFSET ?",
+                      (base_date, n - 1)).fetchone()
+        if not d:
+            return None
+        r = c.execute("SELECT * FROM scans WHERE status='done' AND base_date=? AND profile=? ORDER BY id DESC LIMIT 1",
+                      (d[0], profile)).fetchone()
+    return dict(r) if r else None
+
+
 def bt_scan(date):
     """투자검증 기준일(사용자가 고른 날 또는 실제 거래일)의 가장 최근 완료 결과."""
     with conn() as c:
@@ -360,6 +383,11 @@ def _fix_row(d):
     for k in NUM_COLS:
         if k in d:
             d[k] = _from_blob(d[k])
+    if "flags" in d:
+        try:
+            d["flags"] = json.loads(d["flags"] or "[]")
+        except ValueError:
+            d["flags"] = []
     return d
 
 
@@ -371,6 +399,10 @@ def repair_numeric_blobs():
             c.executemany(f"UPDATE scores SET {col}=? WHERE rowid=?", [(_from_blob(r[1]), r[0]) for r in rows])
 
 
+SCORE_COLS = ("scan_id, ticker, name, market, sector, close, chg, mcap, s_short, s_mid, s_long, base, bonus, penalty, "
+              "final, grade, coverage, core_avg, knockout, gate, target, stop, detail, flags")
+
+
 def save_scores(scan_id, results, with_detail=True):
     """with_detail=False면 항목별 상세 없이 점수만 저장한다 (투자검증의 이후 날짜 점수 추이용)."""
     rows = []
@@ -379,16 +411,17 @@ def save_scores(scan_id, results, with_detail=True):
             "items": {k: [v.score, v.value, v.basis, v.est, v.src] for k, v in r["items"].items()},
             "persp": r["persp"], "cov": r["cov"], "adj": r["adj"], "d4_auto": r.get("d4_auto"), "gate": r["gate"],
             "knockout": r["knockout"], "reliability": r["reliability"], "grade_label": r["grade_label"],
-            "weights": r.get("weights"),
+            "weights": r.get("weights"), "low": r.get("low"), "flags": r.get("flags"),
         }
         n = _num
         rows.append((scan_id, str(r["ticker"]), str(r["name"]), r["market"], r["sector"], n(r["close"]), n(r["chg"]),
                      n(r["mcap"]), n(r["persp"]["단기"]), n(r["persp"]["중기"]), n(r["persp"]["장기"]), n(r["base"]),
                      n(r["bonus"]), n(r["penalty"]), n(r["final"]), r["grade"], n(r["coverage"]), n(r["core_avg"]),
                      " / ".join(r["knockout"]), " / ".join(r["gate"]), n(r["target"]), n(r["stop"]),
-                     zlib.compress(json.dumps(detail, ensure_ascii=False, default=float).encode()) if with_detail else None))
+                     zlib.compress(json.dumps(detail, ensure_ascii=False, default=float).encode()) if with_detail else None,
+                     json.dumps(r.get("flags") or [], ensure_ascii=False)))
     with conn() as c:
-        c.executemany(f"INSERT OR REPLACE INTO scores VALUES({','.join('?' * 23)})", rows)
+        c.executemany(f"INSERT OR REPLACE INTO scores({SCORE_COLS}) VALUES({','.join('?' * 24)})", rows)
 
 
 def scores(scan_id):

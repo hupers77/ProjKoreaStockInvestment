@@ -24,6 +24,7 @@
   </div>
   {% for k in d.knockout %}<div class="err small" style="margin-top:8px">제외 필터: {{ k }}</div>{% endfor %}
   {% for g in d.gate %}<div class="warn small" style="margin-top:8px">등급 게이트: {{ g }}</div>{% endfor %}
+  {% for k, txt in (d.flags or []) %}<div class="small" style="margin-top:8px"><span class="sig {{ k }}">{{ '저점' if k == 'low' else '⚠ 경고' }}</span> {{ txt }}</div>{% endfor %}
 </div>
 
 <div class="row">
@@ -85,9 +86,10 @@
     <tr>
       <td class="l">{{ it.id }}{{ ' ★' if it.core }}</td>
       <td class="l">{{ it.name }}</td>
-      <td>{{ w|num }}{% if w != it.weight %} <span class="muted small">(권장 {{ it.weight }})</span>{% endif %}</td>
-      <td>{% if v[0] is none %}<span class="na">N/A</span>{% else %}<b>{{ v[0]|num }}</b>{% if v[3] %}<span class="est">추정</span>{% endif %}{% if v[4]=='수동' %}<span class="man">수동</span>{% endif %}{% endif %}</td>
-      <td>{{ (v[0]*w/10)|num(1) if v[0] is not none else '-' }}</td>
+      <td>{{ w|num }}{% if w != it.weight %} <span class="muted small">(기준서 {{ it.weight }})</span>{% endif %}</td>
+      {% set lv = (d.low or {}).get(it.id) %}
+      <td>{% if v[0] is none %}<span class="na">N/A</span>{% else %}<b>{{ v[0]|num }}</b>{% if v[3] %}<span class="est">추정</span>{% endif %}{% if v[4]=='수동' %}<span class="man">수동</span>{% endif %}{% if lv is not none %}<span class="sig low" title="저점 매수 변환 점수">→ {{ lv|num }}</span>{% endif %}{% endif %}</td>
+      <td>{{ ((lv if lv is not none else v[0])*w/10)|num(1) if v[0] is not none else '-' }}</td>
       <td class="val">{{ v[1] }}</td>
       <td class="basis">{{ v[2] }}</td>
       {% if not bt %}<td class="l"><input type="number" min="0" max="10" step="1" style="width:64px" data-item="{{ it.id }}" class="mscore" value="{{ m.score|int if m else '' }}"></td>
