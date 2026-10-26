@@ -70,7 +70,7 @@
 <div class="row">
   <div class="card" style="flex:2 1 500px"><h2>주가 (이동평균 20·60·120, 거래대금){% if bt %} <span class="muted small">· 세로 점선 = 기준일, 이후는 오늘까지 실제 흐름</span>{% endif %}</h2>
     {% if px_json == "[]" %}<p class="muted small">저장된 시세가 없습니다.</p>{% else %}<canvas id="px" height="110"></canvas>{% endif %}</div>
-  <div class="card" style="flex:1 1 300px"><h2>점수 추이 <span class="muted small">· 기준일 1년 전부터{% if bt %}, 세로 점선 = 기준일{% endif %}</span></h2><canvas id="hist" height="160"></canvas></div>
+  <div class="card" style="flex:1 1 300px"><h2>점수 추이 <span class="muted small">· 기준일 1년 전부터, 굵은 선 = {{ prof.name.split(' (')[0] }}, 가는 점선 = 다른 프로파일 최종 점수{% if bt %}, 세로 점선 = 기준일{% endif %}</span></h2><canvas id="hist" height="160"></canvas></div>
 </div>
 
 <div class="card">
@@ -122,7 +122,7 @@ function goBack() {
   if (history.length > 1 && document.referrer && new URL(document.referrer).origin === location.origin) { history.back(); return false; }
   return true;  // 이전 화면이 없으면 링크대로 대시보드로 이동
 }
-const PX = {{ px_json|safe }}, HIST = {{ hist_json|safe }}, AFTER = {{ after_json|safe }};
+const PX = {{ px_json|safe }}, HIST = {{ hist_json|safe }}, AFTER = {{ after_json|safe }}, PROF_NAMES = {{ prof_names_json|safe }};
 const TARGET = {{ 'null' if bt else (r.target or 'null') }}, STOP = {{ 'null' if bt else (r.stop or 'null') }};
 const BASE = '{{ scan.base_date }}', IS_BT = {{ 'true' if bt else 'false' }};
 // 기준일 위치에 세로 점선을 긋는 Chart.js 플러그인 (투자검증일 때만)
@@ -161,10 +161,14 @@ if (PX.length && window.Chart) {
 }
 if (window.Chart) new Chart(document.getElementById('hist'), {type: 'line', plugins: [baseLine(HIST.findIndex(h => h.base_date >= BASE))],
   data: {labels: HIST.map(h => (h.base_date || '').slice(2)),
-  datasets: [{label: '최종', data: HIST.map(h => h.final), borderColor: '#0f7b4b', pointRadius: 2},
+  datasets: [{label: '최종 ' + PROF_NAMES['{{ scan.profile }}'], data: HIST.map(h => h.final), borderWidth: 2.5, borderColor: '#0f7b4b', pointRadius: 2},
     {label: '단기', data: HIST.map(h => h.s_short), borderColor: '#e07b00', borderWidth: 1, pointRadius: 0},
     {label: '중기', data: HIST.map(h => h.s_mid), borderColor: '#2457c5', borderWidth: 1, pointRadius: 0},
-    {label: '장기', data: HIST.map(h => h.s_long), borderColor: '#7a3ec8', borderWidth: 1, pointRadius: 0}]},
+    {label: '장기', data: HIST.map(h => h.s_long), borderColor: '#7a3ec8', borderWidth: 1, pointRadius: 0},
+    // 다른 프로파일의 최종 점수 (점선, 범례를 누르면 숨김·표시)
+    ...Object.keys(PROF_NAMES).filter(p => HIST.some(h => h.pf && h.pf[p] != null)).map((p, i) => ({
+      label: PROF_NAMES[p], data: HIST.map(h => (h.pf || {})[p] ?? null), borderDash: [4, 3], borderWidth: 1.5,
+      pointRadius: 0, spanGaps: true, borderColor: ['#d6336c', '#0b8a8a', '#8a6d0b', '#5c5f66', '#e8590c', '#3b5bdb'][i % 6]}))]},
   options: {animation: false, interaction: {mode: 'index', intersect: false}, scales: {y: {min: 0, max: 100}, x: {ticks: {maxTicksLimit: 8}}},
     plugins: {legend: {labels: {boxWidth: 12}}}}});
 async function saveManual() {
