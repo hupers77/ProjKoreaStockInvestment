@@ -68,9 +68,9 @@
 </div>
 
 <div class="row">
-  <div class="card" style="flex:2 1 500px"><h2>주가 (이동평균 20·60·120, 거래대금){% if bt %} <span class="muted small">· 세로 점선 = 기준일, 이후는 오늘까지 실제 흐름</span>{% endif %}</h2>
+  <div class="card" id="px-card" style="flex:2 1 500px;min-width:0"><h2>주가 (이동평균 20·60·120, 거래대금){% if bt %} <span class="muted small">· 세로 점선 = 기준일, 이후는 오늘까지 실제 흐름</span>{% endif %}</h2>
     {% if px_json == "[]" %}<p class="muted small">저장된 시세가 없습니다.</p>{% else %}<canvas id="px" height="110"></canvas>{% endif %}</div>
-  <div class="card" style="flex:1 1 300px"><h2>점수 추이 <span class="muted small">· 기준일 1년 전부터, 굵은 선 = {{ prof.name.split(' (')[0] }}, 가는 점선 = 다른 프로파일 최종 점수{% if bt %}, 세로 점선 = 기준일{% endif %}</span></h2><canvas id="hist" height="160"></canvas></div>
+  <div class="card" id="hist-card" style="flex:1 1 300px;min-width:0;cursor:zoom-in" title="클릭하면 크게 보기 / 다시 클릭하면 원래 크기"><h2>점수 추이 <span class="muted small">· 클릭하면 넓게 보기, 기준일 1년 전부터, 굵은 선 = {{ prof.name.split(' (')[0] }}, 가는 점선 = 다른 프로파일 최종 점수{% if bt %}, 세로 점선 = 기준일{% endif %}</span></h2><canvas id="hist" height="160"></canvas></div>
 </div>
 
 <div class="card">
@@ -171,6 +171,25 @@ if (window.Chart) new Chart(document.getElementById('hist'), {type: 'line', plug
       pointRadius: 0, spanGaps: true, borderColor: ['#d6336c', '#0b8a8a', '#8a6d0b', '#5c5f66', '#e8590c', '#3b5bdb'][i % 6]}))]},
   options: {animation: false, interaction: {mode: 'index', intersect: false}, scales: {y: {min: 0, max: 100}, x: {ticks: {maxTicksLimit: 8}}},
     plugins: {legend: {labels: {boxWidth: 12}}}}});
+// 점수 추이 카드를 누르면 주가 차트와 넓이를 맞바꾼다 (다시 누르면 원래대로). 범례를 누를 때는 선 숨김만 한다
+document.getElementById('hist-card').addEventListener('click', e => {
+  const hc = Chart.getChart('hist'), pc = Chart.getChart('px');
+  if (e.target.id === 'hist' && hc && hc.legend && e.offsetY <= hc.legend.bottom) return;
+  const hcard = document.getElementById('hist-card'), pcard = document.getElementById('px-card');
+  const wide = hcard.dataset.wide !== '1';
+  hcard.dataset.wide = wide ? '1' : '';
+  hcard.style.flex = wide ? '2 1 500px' : '1 1 300px';
+  pcard.style.flex = wide ? '1 1 300px' : '2 1 500px';
+  hcard.style.cursor = wide ? 'zoom-out' : 'zoom-in';
+  // 넓어진 차트가 원래 주가 차트 높이 비율을 쓰도록 가로세로 비율도 맞바꾼다
+  if (hc && pc) {
+    const ha = hc.aspectRatio, pa = pc.aspectRatio;
+    if (!hcard.dataset.ha) { hcard.dataset.ha = ha; hcard.dataset.pa = pa; }
+    hc.options.aspectRatio = Number(wide ? hcard.dataset.pa : hcard.dataset.ha);
+    pc.options.aspectRatio = Number(wide ? hcard.dataset.ha : hcard.dataset.pa);
+    hc.resize(); pc.resize();
+  }
+});
 async function saveManual() {
   const items = [];
   document.querySelectorAll('input.mscore').forEach(el => {
