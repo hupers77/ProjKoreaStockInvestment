@@ -170,6 +170,9 @@ def stock(ticker):
     meta = json.loads(scan["env"] or "{}")
     since = (datetime.strptime(base, "%Y%m%d") - timedelta(days=365)).strftime("%Y%m%d")
     hist = db.score_history(ticker, since=since, profile=scan["profile"])  # 기준일 1년 전부터 오늘까지 일자별 점수
+    others = db.score_history_profiles(ticker, since=since)  # 다른 프로파일 최종 점수 (차트에 점선으로 함께 표시)
+    for h in hist:
+        h["pf"] = {p: v for p, v in others.get(h["base_date"], {}).items() if p != scan["profile"]}
     manual = db.manual_scores().get(ticker, {})
     holding = next((h for h in db.holdings() if h["ticker"] == ticker), None)
     excluded = any(e["ticker"] == ticker for e in db.exclusions())
@@ -211,7 +214,8 @@ def stock(ticker):
     return render_template("stock.html", scan=scan, r=r, d=r["detail"], groups=groups, manual=manual, hist=hist, d4_auto=d4_auto,
                            holding=holding, excluded=excluded, sources=meta.get("sources", {}), bt=bt, res=res,
                            options=db.ticker_scans(ticker), options_live_id=(db.latest_scan() or {}).get("id"), px_json=json.dumps(px), after_json=json.dumps(px_after),
-                           hist_json=json.dumps(hist), penalties=PENALTIES, bonuses=BONUSES,
+                           hist_json=json.dumps(hist), prof_names_json=json.dumps(
+                               {k: v["name"].split(" (")[0] for k, v in PROFILES.items()}, ensure_ascii=False), penalties=PENALTIES, bonuses=BONUSES,
                            prof=PROFILES.get(scan["profile"], PROFILES["C"]), can_rescore=scanner.LAST["scan_id"] == scan["id"])
 
 

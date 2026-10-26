@@ -568,6 +568,16 @@ def score_history(ticker, since=None, limit=400, profile=None):
             (ticker, profile or active_profile(), since or "", limit))][::-1]
 
 
+def score_history_profiles(ticker, since=None):
+    """모든 프로파일의 일자별 최종 점수 {날짜: {프로파일: 점수}} (점수 추이 차트의 다른 프로파일 선용)."""
+    out = {}
+    with conn() as c:
+        for d, p, v in c.execute("SELECT date, profile, final FROM score_days WHERE ticker=? AND date >= ?",
+                                 (ticker, since or "")):
+            out.setdefault(d, {})[p] = None if v is None else v / 10
+    return out
+
+
 def delete_bt_days(base_date):
     """투자검증 기준일의 이후 날짜 점수(kind='btd')를 지운다 (다시 계산하기 전)."""
     with conn() as c:
