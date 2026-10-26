@@ -1001,7 +1001,8 @@ def knockouts(t: Ctx, st):
 
 # ───────────────────────── 종합 ─────────────────────────
 
-def score_ticker(t: Ctx, st, manual):
+def item_scores(t: Ctx, manual):
+    """항목별 점수 (프로파일과 무관). 프로파일별 합산은 score_ticker가 한다."""
     items = {}
     for iid, meta in ITEM_MAP.items():
         m = manual.get(iid)
@@ -1023,7 +1024,13 @@ def score_ticker(t: Ctx, st, manual):
             if r.est and r.src != "수동":
                 r.score = min(r.score, 6.0)
         items[iid] = r
+    return items
 
+
+def score_ticker(t: Ctx, st, manual, items=None, flags=None):
+    """items·flags를 주면 다시 계산하지 않는다 (여러 프로파일을 한 번에 채점할 때)."""
+    if items is None:
+        items = item_scores(t, manual)
     W = st.get("weights") or {}
     wt = lambda iid: float(W.get(iid, ITEM_MAP[iid]["weight"]))  # 프로파일별 사용자 가중치 (없으면 권장값)
     prof = PROFILES.get(st["profile"], PROFILES["C"])
@@ -1103,7 +1110,8 @@ def score_ticker(t: Ctx, st, manual):
         "knockout": ko, "coverage": coverage, "reliability": reliability,
         "core_avg": float(np.mean(core_vals)) if core_vals else 0.0,
         "target": t.cache.get("target"), "stop": t.cache.get("stop"),
-        "weights": {i: wt(i) for i in ITEM_MAP}, "low": low, "flags": signal_flags(t, items),
+        "weights": {i: wt(i) for i in ITEM_MAP}, "low": low,
+        "flags": signal_flags(t, items) if flags is None else flags,
     }
 
 
@@ -1129,21 +1137,34 @@ def signal_flags(t: Ctx, items):
     return out
 
 
-def score_universe(b: Bundle, st, holdings=(), exclusions=(), manual=None, progress=None):
+def score_universe_all(b: Bundle, sts, holdings=(), exclusions=(), manual=None, progress=None):
+    """모든 프로파일을 한 번에 채점한다. sts = {프로파일: 점수 설정}. 항목 점수는 종목당 한 번만 계산한다.
+    결과: ({프로파일: [종목 결과…]}, 유니버스)"""
     manual = manual or {}
     holdings, exclusions = set(holdings), set(exclusions)
     tickers = [tk for tk in b.info.index if tk in b.close.columns and b.close[tk].notna().sum() >= 20]
     u = build_universe(b, tickers)
-    out = []
+    out = {p: [] for p in sts}
     for i, tk in enumerate(tickers):
         if tk in exclusions and tk not in holdings:
             continue
         t = Ctx(tk, b, u)
-        res = score_ticker(t, st, manual.get(tk, {}))
-        res.update({"ticker": tk, "name": t.info.get("name", tk), "market": t.market, "sector": t.sector,
-                    "close": float(t.c.iloc[-1]), "mcap": t.mcap, "chg": float(ind.ret(t.c, 1) or 0)})
-        out.append(res)
+        mt = manual.get(tk, {})
+        items = item_scores(t, mt)
+        flags = signal_flags(t, items)
+        meta = {"ticker": tk, "name": t.info.get("name", tk), "market": t.market, "sector": t.sector,
+                "close": float(t.c.iloc[-1]), "mcap": t.mcap, "chg": float(ind.ret(t.c, 1) or 0)}
+        for p, st in sts.items():
+            res = score_ticker(t, st, mt, items, flags)
+            res.update(meta, profile=p)
+            out[p].append(res)
         if progress and i % 200 == 0:
             progress(i, len(tickers))
-    out.sort(key=lambda r: (r["grade"] != "X", r["final"], r["core_avg"]), reverse=True)
+    for rs in out.values():
+        rs.sort(key=lambda r: (r["grade"] != "X", r["final"], r["core_avg"]), reverse=True)
     return out, u
+
+
+def score_universe(b: Bundle, st, holdings=(), exclusions=(), manual=None, progress=None):
+    res, u = score_universe_all(b, {st["profile"]: st}, holdings, exclusions, manual, progress)
+    return res[st["profile"]], u

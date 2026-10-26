@@ -25,13 +25,20 @@ CREATE TABLE IF NOT EXISTS manual_scores(ticker TEXT, item TEXT, score REAL, val
 CREATE TABLE IF NOT EXISTS scans(id INTEGER PRIMARY KEY AUTOINCREMENT, started_at TEXT, finished_at TEXT,
     base_date TEXT, profile TEXT, status TEXT, message TEXT, n_scored INTEGER, demo INTEGER DEFAULT 0,
     env TEXT, warnings TEXT, trigger TEXT);
-CREATE TABLE IF NOT EXISTS scores(scan_id INTEGER, ticker TEXT, name TEXT, market TEXT, sector TEXT,
-    close REAL, chg REAL, mcap REAL, s_short REAL, s_mid REAL, s_long REAL, base REAL, bonus REAL,
-    penalty REAL, final REAL, grade TEXT, coverage REAL, core_avg REAL, knockout TEXT, gate TEXT,
-    target REAL, stop REAL, detail BLOB, PRIMARY KEY(scan_id, ticker));
-CREATE INDEX IF NOT EXISTS ix_scores_ticker ON scores(ticker, scan_id);
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
+-- 일자별 점수: 1년 × 전 종목 × 6개 프로파일이라 행이 많아 점수는 ×10 정수로 저장한다 (종가는 prices 표에 있음)
+CREATE TABLE IF NOT EXISTS score_days(date TEXT, profile TEXT, ticker TEXT, final INTEGER, grade TEXT,
+    s_short INTEGER, s_mid INTEGER, s_long INTEGER, src TEXT, PRIMARY KEY(ticker, profile, date)) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS ix_score_days_date ON score_days(date, profile);
 """
+
+# 한 스캔에 모든 프로파일 점수를 저장한다 (profile 열). 항목별 상세(items)는 스캔 당시 적용 프로파일 행에만 둔다
+SCORES_SQL = """CREATE TABLE IF NOT EXISTS scores(scan_id INTEGER, profile TEXT, ticker TEXT, name TEXT, market TEXT,
+    sector TEXT, close REAL, chg REAL, mcap REAL, s_short REAL, s_mid REAL, s_long REAL, base REAL, bonus REAL,
+    penalty REAL, final REAL, grade TEXT, coverage REAL, core_avg REAL, knockout TEXT, gate TEXT,
+    target REAL, stop REAL, detail BLOB, flags TEXT, PRIMARY KEY(scan_id, profile, ticker));
+CREATE INDEX IF NOT EXISTS ix_scores_ticker ON scores(ticker, scan_id);"""
+
 
 DEFAULTS = {
     "scan_time": "20:30",          # 평일 자동 스캔 시각 (한국 시간). KRX 장 종료(20시) 뒤
@@ -69,13 +76,12 @@ def conn():
 def init():
     with conn() as c:
         c.executescript(SCHEMA)
+        _migrate_scores(c)
         cols = {r[1] for r in c.execute("PRAGMA table_info(scans)")}
         if "kind" not in cols:  # live = 정기·수동 스캔, bt = 투자검증(과거 기준일)
             c.execute("ALTER TABLE scans ADD COLUMN kind TEXT DEFAULT 'live'")
         if "req_date" not in cols:  # 투자검증에서 사용자가 고른 기준일 (실제 기준일은 그 이전 마지막 거래일)
             c.execute("ALTER TABLE scans ADD COLUMN req_date TEXT")
-        if "flags" not in {r[1] for r in c.execute("PRAGMA table_info(scores)")}:  # 저점 후보·경고 표시 (JSON)
-            c.execute("ALTER TABLE scores ADD COLUMN flags TEXT")
         if "code" not in cols:  # 사람이 보는 스캔 번호 'yymmdd-001' (날짜별 일련번호, 중복 없음)
             c.execute("ALTER TABLE scans ADD COLUMN code TEXT")
         seq = {}
@@ -93,6 +99,42 @@ def init():
         for k, v in DEFAULTS.items():
             c.execute("INSERT OR IGNORE INTO settings(key, value) VALUES(?, ?)", (k, v))
     repair_numeric_blobs()
+    _init_score_days()
+
+
+def _migrate_scores(c):
+    """예전 scores(스캔당 프로파일 1개)를 프로파일 열이 있는 표로 옮긴다. 예전 행의 프로파일 = 그 스캔의 프로파일."""
+    old = {r[1] for r in c.execute("PRAGMA table_info(scores)")}
+    if not old:
+        c.executescript(SCORES_SQL)
+        return
+    if "profile" in old:
+        return
+    c.execute("ALTER TABLE scores RENAME TO scores_old")
+    c.execute("DROP INDEX IF EXISTS ix_scores_ticker")
+    c.executescript(SCORES_SQL)
+    cols = [x for x in ("ticker", "name", "market", "sector", "close", "chg", "mcap", "s_short", "s_mid", "s_long",
+                        "base", "bonus", "penalty", "final", "grade", "coverage", "core_avg", "knockout", "gate",
+                        "target", "stop", "detail", "flags") if x in old]
+    sel = ", ".join("o." + x for x in cols)
+    c.execute(f"INSERT INTO scores(scan_id, profile, {', '.join(cols)}) "
+              f"SELECT o.scan_id, COALESCE(s.profile, 'C'), {sel} FROM scores_old o LEFT JOIN scans s ON s.id=o.scan_id")
+    c.execute("DROP TABLE scores_old")
+
+
+def _init_score_days():
+    """일자별 점수(score_days)가 비어 있으면 지금까지의 스캔 결과로 채운다 (기준일별 가장 최근 스캔)."""
+    with conn() as c:
+        if c.execute("SELECT 1 FROM settings WHERE key='score_days_init'").fetchone():
+            return
+        c.execute("""INSERT OR IGNORE INTO score_days(date, profile, ticker, final, grade, s_short, s_mid, s_long, src)
+            SELECT s.base_date, sc.profile, sc.ticker, ROUND(sc.final*10), sc.grade, ROUND(sc.s_short*10),
+                   ROUND(sc.s_mid*10), ROUND(sc.s_long*10),
+                   CASE COALESCE(s.kind,'live') WHEN 'live' THEN 'live' WHEN 'bt' THEN 'bt' ELSE 'calc' END
+            FROM scores sc JOIN scans s ON s.id=sc.scan_id
+            WHERE s.id IN (SELECT MAX(id) FROM scans WHERE status='done' AND base_date IS NOT NULL AND base_date != ''
+                           AND COALESCE(kind,'live') IN ('live','bt','btd') GROUP BY base_date)""")
+        c.execute("INSERT OR IGNORE INTO settings(key, value) VALUES('score_days_init', '1')")
 
 
 # ── 설정 ──
@@ -144,13 +186,29 @@ def profile_weights(p, st=None):
     return out
 
 
-def scoring_settings(st=None):
+def active_profile(st=None):
     st = st or settings()
-    p = st["profile"] if st["profile"] in PROFILE_KEYS else "C"
+    return st["profile"] if st["profile"] in PROFILE_KEYS else "C"
+
+
+def scoring_settings(st=None, p=None):
+    st = st or settings()
+    p = p or active_profile(st)
     c = profile_criteria(st)[p]
     return {"profile": p, "k7_value_eok": float(c["k7_value_eok"]), "k8_mcap_eok": float(c["k8_mcap_eok"]),
             "gate_s_cov": float(c["gate_s_cov"]), "gate_a_cov": float(c["gate_a_cov"]),
             "weights": profile_weights(p, st)}
+
+
+def scoring_settings_all(st=None):
+    """모든 프로파일의 점수 설정 {프로파일: 설정}."""
+    st = st or settings()
+    return {p: scoring_settings(st, p) for p in PROFILE_KEYS}
+
+
+def criteria_snapshot(st=None):
+    """점수 계산에 쓰는 기준값 전체 (기준값이 바뀌었는지 비교용)."""
+    return json.dumps(scoring_settings_all(st), sort_keys=True)
 
 
 def save_raw_settings(d):
@@ -285,6 +343,7 @@ def delete_old_scans(days=365):
             q = ",".join("?" * len(chunk))
             c.execute(f"DELETE FROM scores WHERE scan_id IN ({q})", chunk)
             c.execute(f"DELETE FROM scans WHERE id IN ({q})", chunk)
+        c.execute("DELETE FROM score_days WHERE date < ?", ((datetime.now() - timedelta(days=days + 30)).strftime("%Y%m%d"),))
     return shown
 
 
@@ -313,18 +372,6 @@ def prev_scan(scan_id):
     with conn() as c:
         r = c.execute("SELECT * FROM scans WHERE status='done' AND COALESCE(kind,'live')='live' AND id<? "
                       "ORDER BY id DESC LIMIT 1", (scan_id,)).fetchone()
-    return dict(r) if r else None
-
-
-def scan_days_ago(base_date, n, profile):
-    """base_date보다 n거래일 앞선 날의 같은 프로파일 완료 스캔 (정기·투자검증 모두, 없으면 None)."""
-    with conn() as c:
-        d = c.execute("SELECT date FROM price_days WHERE date<? ORDER BY date DESC LIMIT 1 OFFSET ?",
-                      (base_date, n - 1)).fetchone()
-        if not d:
-            return None
-        r = c.execute("SELECT * FROM scans WHERE status='done' AND base_date=? AND profile=? ORDER BY id DESC LIMIT 1",
-                      (d[0], profile)).fetchone()
     return dict(r) if r else None
 
 
@@ -399,58 +446,126 @@ def repair_numeric_blobs():
             c.executemany(f"UPDATE scores SET {col}=? WHERE rowid=?", [(_from_blob(r[1]), r[0]) for r in rows])
 
 
-SCORE_COLS = ("scan_id, ticker, name, market, sector, close, chg, mcap, s_short, s_mid, s_long, base, bonus, penalty, "
-              "final, grade, coverage, core_avg, knockout, gate, target, stop, detail, flags")
+SCORE_COLS = ("scan_id, profile, ticker, name, market, sector, close, chg, mcap, s_short, s_mid, s_long, base, bonus, "
+              "penalty, final, grade, coverage, core_avg, knockout, gate, target, stop, detail, flags")
 
 
-def save_scores(scan_id, results, with_detail=True):
-    """with_detail=False면 항목별 상세 없이 점수만 저장한다 (투자검증의 이후 날짜 점수 추이용)."""
+def save_scores(scan_id, results, with_detail=True, items_profile=None):
+    """with_detail=False면 항목별 상세 없이 점수만 저장한다.
+    items_profile을 주면 항목별 점수(items)는 그 프로파일 행에만 저장한다 (항목 점수는 프로파일과 무관해 중복 저장하지 않음)."""
     rows = []
     for r in results:
+        p = r.get("profile") or active_profile()
         detail = {
-            "items": {k: [v.score, v.value, v.basis, v.est, v.src] for k, v in r["items"].items()},
             "persp": r["persp"], "cov": r["cov"], "adj": r["adj"], "d4_auto": r.get("d4_auto"), "gate": r["gate"],
             "knockout": r["knockout"], "reliability": r["reliability"], "grade_label": r["grade_label"],
             "weights": r.get("weights"), "low": r.get("low"), "flags": r.get("flags"),
         }
+        if items_profile is None or p == items_profile:
+            detail["items"] = {k: [v.score, v.value, v.basis, v.est, v.src] for k, v in r["items"].items()}
         n = _num
-        rows.append((scan_id, str(r["ticker"]), str(r["name"]), r["market"], r["sector"], n(r["close"]), n(r["chg"]),
+        rows.append((scan_id, p, str(r["ticker"]), str(r["name"]), r["market"], r["sector"], n(r["close"]), n(r["chg"]),
                      n(r["mcap"]), n(r["persp"]["단기"]), n(r["persp"]["중기"]), n(r["persp"]["장기"]), n(r["base"]),
                      n(r["bonus"]), n(r["penalty"]), n(r["final"]), r["grade"], n(r["coverage"]), n(r["core_avg"]),
                      " / ".join(r["knockout"]), " / ".join(r["gate"]), n(r["target"]), n(r["stop"]),
                      zlib.compress(json.dumps(detail, ensure_ascii=False, default=float).encode()) if with_detail else None,
                      json.dumps(r.get("flags") or [], ensure_ascii=False)))
     with conn() as c:
-        c.executemany(f"INSERT OR REPLACE INTO scores({SCORE_COLS}) VALUES({','.join('?' * 24)})", rows)
+        c.executemany(f"INSERT OR REPLACE INTO scores({SCORE_COLS}) VALUES({','.join('?' * 25)})", rows)
 
 
-def scores(scan_id):
+def delete_scan_scores(scan_id):
+    with conn() as c:
+        c.execute("DELETE FROM scores WHERE scan_id=?", (scan_id,))
+
+
+def view_profile(scan_id, profile=None):
+    """이 스캔을 보여 줄 프로파일: 지금 적용 프로파일(또는 지정한 것)의 점수가 있으면 그것, 없으면(예전 스캔) 스캔 당시 프로파일."""
+    p = profile or active_profile()
+    with conn() as c:
+        if c.execute("SELECT 1 FROM scores WHERE scan_id=? AND profile=? LIMIT 1", (scan_id, p)).fetchone():
+            return p
+        r = c.execute("SELECT profile FROM scans WHERE id=?", (scan_id,)).fetchone()
+    return r[0] if r else p
+
+
+def scores(scan_id, profile=None):
+    p = view_profile(scan_id, profile)
     with conn() as c:
         return [_fix_row(dict(r)) for r in c.execute(
-            "SELECT * FROM scores WHERE scan_id=? ORDER BY (grade='X'), final DESC, core_avg DESC", (scan_id,))]
+            "SELECT * FROM scores WHERE scan_id=? AND profile=? ORDER BY (grade='X'), final DESC, core_avg DESC",
+            (scan_id, p))]
 
 
-def score_detail(scan_id, ticker):
+def score_detail(scan_id, ticker, profile=None):
+    p = view_profile(scan_id, profile)
     with conn() as c:
-        r = c.execute("SELECT * FROM scores WHERE scan_id=? AND ticker=?", (scan_id, ticker)).fetchone()
-    if not r:
-        return None
-    d = _fix_row(dict(r))
-    d["detail"] = json.loads(zlib.decompress(d["detail"])) if d["detail"] else None
+        r = c.execute("SELECT * FROM scores WHERE scan_id=? AND profile=? AND ticker=?", (scan_id, p, ticker)).fetchone()
+        if not r:
+            return None
+        d = _fix_row(dict(r))
+        d["detail"] = json.loads(zlib.decompress(d["detail"])) if d["detail"] else None
+        if d["detail"] is not None and "items" not in d["detail"]:  # 항목 점수는 같은 스캔의 다른 프로파일 행에 있다
+            for x in c.execute("SELECT detail FROM scores WHERE scan_id=? AND ticker=? AND detail IS NOT NULL "
+                               "AND profile != ?", (scan_id, ticker, p)):
+                other = json.loads(zlib.decompress(x[0]))
+                if "items" in other:
+                    d["detail"]["items"] = other["items"]
+                    break
+            else:
+                d["detail"] = None
     return d
 
 
-def score_history(ticker, since=None, limit=400):
-    """일자별 점수 추이 (정기·투자검증 스캔 모두). 같은 날 여러 번 계산했으면 그날의 마지막 값만 쓴다.
-    since(YYYYMMDD) 이후만 돌려준다."""
+# ── 일자별 점수 (모든 프로파일, 1년 점수 추이·전일 대비용) ──
+def _x10(x):
+    v = _num(x)
+    return None if v is None else int(round(v * 10))
+
+
+def day_rows(date, results_by_profile, src):
+    """score_days 저장 행. src: live = 정기·수동 스캔, bt = 투자검증 기준일, calc = 저장된 시세로 계산한 날."""
+    return [(date, p, str(r["ticker"]), _x10(r["final"]), r["grade"], _x10(r["persp"]["단기"]), _x10(r["persp"]["중기"]),
+             _x10(r["persp"]["장기"]), src) for p, rs in results_by_profile.items() for r in rs]
+
+
+def save_days(date, results_by_profile, src):
+    save_day_rows(day_rows(date, results_by_profile, src))
+
+
+def save_day_rows(rows):
     with conn() as c:
-        return [_fix_row(dict(r)) for r in c.execute(
-            """SELECT s.base_date, s.id, sc.final, sc.grade, sc.s_short, sc.s_mid, sc.s_long, sc.close
-               FROM scores sc JOIN scans s ON s.id=sc.scan_id
-               WHERE sc.ticker=? AND s.id IN (
-                   SELECT MAX(s2.id) FROM scores sc2 JOIN scans s2 ON s2.id=sc2.scan_id
-                   WHERE sc2.ticker=? AND s2.status='done' AND s2.base_date >= ? GROUP BY s2.base_date)
-               ORDER BY s.base_date DESC LIMIT ?""", (ticker, ticker, since or "", limit))][::-1]
+        c.executemany("INSERT OR REPLACE INTO score_days VALUES(?,?,?,?,?,?,?,?,?)", rows)
+
+
+def score_day_dates(since=""):
+    with conn() as c:
+        return {r[0] for r in c.execute("SELECT DISTINCT date FROM score_days WHERE date >= ?", (since,))}
+
+
+def day_scores(date, profile=None):
+    """그날의 {티커: 최종 점수}."""
+    with conn() as c:
+        return {r[0]: r[1] / 10 for r in c.execute("SELECT ticker, final FROM score_days WHERE date=? AND profile=?",
+                                              (date, profile or active_profile()))}
+
+
+def trading_day_before(date, n=1):
+    """date보다 n거래일 앞선 날 (저장된 시세 기준, 없으면 None)."""
+    with conn() as c:
+        r = c.execute("SELECT date FROM price_days WHERE date<? ORDER BY date DESC LIMIT 1 OFFSET ?",
+                      (date, n - 1)).fetchone()
+    return r[0] if r else None
+
+
+def score_history(ticker, since=None, limit=400, profile=None):
+    """일자별 점수 추이 (since(YYYYMMDD) 이후, 프로파일별)."""
+    with conn() as c:
+        return [dict(r) for r in c.execute(
+            """SELECT date AS base_date, final / 10.0 AS final, grade, s_short / 10.0 AS s_short, s_mid / 10.0 AS s_mid,
+                      s_long / 10.0 AS s_long FROM score_days
+               WHERE ticker=? AND profile=? AND date >= ? ORDER BY date DESC LIMIT ?""",
+            (ticker, profile or active_profile(), since or "", limit))][::-1]
 
 
 def delete_bt_days(base_date):
@@ -526,4 +641,4 @@ def stock_names():
     if not s:
         return []
     with conn() as c:
-        return [dict(r) for r in c.execute("SELECT ticker, name, market FROM scores WHERE scan_id=?", (s["id"],))]
+        return [dict(r) for r in c.execute("SELECT DISTINCT ticker, name, market FROM scores WHERE scan_id=?", (s["id"],))]
