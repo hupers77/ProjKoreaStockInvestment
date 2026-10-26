@@ -6,8 +6,8 @@ import pickle
 import threading
 import traceback
 
-from . import db
-from .scoring import score_universe
+from . import db, history
+from .scoring import score_universe_all
 
 _running = threading.Lock()
 LAST = {"bundle": None, "universe": None, "scan_id": None}  # 마지막 스캔 데이터 (수동 점수 즉시 재계산용)
@@ -48,8 +48,50 @@ def is_running():
     return _running.locked()
 
 
-def run_scan(trigger="manual", demo=False):
-    """trigger="recalc"이면 데이터를 새로 받지 않고 저장된 마지막 데이터를 현재 설정·가중치로 다시 채점한다."""
+def _score_save(scan_id, b, src, log=None):
+    """모든 프로파일을 채점해 스캔 결과와 일자별 점수에 저장한다. (적용 프로파일 결과, 유니버스)"""
+    st = db.settings()
+    active = db.active_profile(st)
+    hold = [h["ticker"] for h in db.holdings()]
+    excl = [e["ticker"] for e in db.exclusions()]
+    res, u = score_universe_all(b, db.scoring_settings_all(st), hold, excl, db.manual_scores(),
+                                progress=log and (lambda i, n: log(f"점수 산정 중 (전 프로파일) {i}/{n}")))
+    db.save_scores(scan_id, [r for rs in res.values() for r in rs], items_profile=active)
+    db.save_days(b.base_date, res, src)
+    return res[active], u
+
+
+def _start_pending():
+    """스캔 중에 점수 기준이 바뀌었으면 끝난 뒤 1년 재계산을 시작한다."""
+    if db.raw_setting("rescore_pending") == "1" and not is_running():
+        threading.Thread(target=run_rescore_year, args=("pending",), daemon=True).start()
+
+
+def _fill_missing(demo, extra):
+    """최근 1년 거래일 중 점수가 없는 날을 저장된 시세로 채운다 (지금 스캔 뒤 빠진 날짜)."""
+    days = history.missing_days(demo)
+    if not days:
+        return 0
+    sid = db.scan_start(db.active_profile(), "fill", demo, kind="rc")
+
+    def log(msg):
+        db.scan_update(sid, message=msg)
+        print(f"[과거 점수 {sid}] {msg}", flush=True)
+
+    try:
+        n = history.score_days(days, log, demo, extra=extra)
+        db.scan_update(sid, status="done", finished_at=db.now(), n_scored=n,
+                       message=f"완료 (점수가 없던 {n}개 날짜를 저장된 시세로 계산)")
+        return n
+    except Exception as e:
+        traceback.print_exc()
+        db.scan_update(sid, status="failed", finished_at=db.now(), message=f"{type(e).__name__}: {e}"[:1000])
+        return 0
+
+
+def run_scan(trigger="manual", demo=False, fill=True):
+    """trigger="recalc"이면 데이터를 새로 받지 않고 저장된 마지막 데이터를 현재 설정·가중치로 다시 채점한다.
+    점수는 모든 프로파일로 계산·저장한다. fill이면 스캔 뒤 최근 1년 중 점수가 없는 날을 저장된 시세로 채운다."""
     if not _running.acquire(blocking=False):
         return None
     try:
@@ -82,11 +124,7 @@ def run_scan(trigger="manual", demo=False):
                 from .collector import collect
                 b = collect(st, log)
             log("점수 산정 중…")
-            hold = [h["ticker"] for h in db.holdings()]
-            excl = [e["ticker"] for e in db.exclusions()]
-            results, u = score_universe(b, sst, hold, excl, db.manual_scores(),
-                                        progress=lambda i, n: log(f"점수 산정 중 {i}/{n}"))
-            db.save_scores(scan_id, results)
+            results, u = _score_save(scan_id, b, "live", log)
             LAST.update(bundle=b, universe=u, scan_id=scan_id)
             if not recalc:
                 try:
@@ -99,14 +137,17 @@ def run_scan(trigger="manual", demo=False):
                            env=json.dumps({"env": env, "sources": b.sources}, ensure_ascii=False, default=float),
                            warnings=json.dumps(b.warnings, ensure_ascii=False))
             db.prune_details(int(st.get("keep_detail_scans", 60)))
-            return scan_id
         except Exception as e:
             traceback.print_exc()
             msg = str(e) if isinstance(e, RuntimeError) else f"{type(e).__name__}: {e}"
             db.scan_update(scan_id, status="failed", finished_at=db.now(), message=msg[:1000])
             return scan_id
+        if not recalc and fill:
+            _fill_missing(demo, [b])
+        return scan_id
     finally:
         _running.release()
+        _start_pending()
 
 
 BT_DIR = os.path.join(db.DATA_DIR, "bt")  # 투자검증 기준일별 수집 데이터 (검증 계산에 재사용)
@@ -167,12 +208,8 @@ def run_backtest(req_date, mode="fetch"):
                 os.replace(tmp, bt_bundle_path(b.base_date))
             db.scan_update(scan_id, base_date=b.base_date)
             log("점수 산정 중…")
-            hold = [h["ticker"] for h in db.holdings()]
-            excl = [e["ticker"] for e in db.exclusions()]
-            results, u = score_universe(b, sst, hold, excl, db.manual_scores(),
-                                        progress=lambda i, n: log(f"점수 산정 중 {i}/{n}"))
-            db.save_scores(scan_id, results)
-            n_days = _score_after_days(b, sst, hold, excl, log)
+            results, u = _score_save(scan_id, b, "bt", log)
+            n_days = _score_after_days(b, log)
             env = {mk: {k: v for k, v in e.items() if k != "conds"} | {"conds": e["conds"]} for mk, e in u["env"].items()}
             db.scan_update(scan_id, status="done", finished_at=db.now(), n_scored=len(results),
                            message=("완료 (검증 계산" if mode == "calc" else "완료 (") + f"이후 {n_days}개 날짜 점수 포함)",
@@ -186,76 +223,83 @@ def run_backtest(req_date, mode="fetch"):
             return scan_id
     finally:
         _running.release()
+        _start_pending()
 
 
-AFTER_DAILY_MAX = 20  # 기준일 이후 거래일이 이보다 많으면 5거래일(주 1회) 간격으로 계산 (전 종목 1회 채점이 수십 초)
-
-
-def _after_bundles(b):
-    """기준일 이후 날짜별 채점용 데이터 묶음을 만든다 (데이터를 새로 받지 않음).
-    주가·거래량·지수는 그날까지의 실제 값, 시가총액·PER·PBR·배당수익률은 주가 비율로 조정,
-    수급·외국인 지분율·재무·환율은 기준일 값을 그대로 쓴다."""
-    import pandas as pd
-    from .bundle import Bundle
-    n_hist = len(b.close)
+def _score_after_days(b, log):
+    """기준일 다음 날부터 오늘까지 점수가 없는 날을 저장된 시세로 채워 점수 추이에 쓴다."""
+    have = db.score_day_dates(b.base_date)
     if b.demo:
-        from .demo import _paths, make_bundle
-        _, _, _, close, high, low, opn, volume, value, _ = _paths(len(b.info), 7)
-        panels = {"close": close, "high": high, "low": low, "open": opn, "volume": volume, "value": value}
-        idx_full = make_bundle(n=len(b.info)).index_close
+        from .demo import full_close
+        days = [d.strftime("%Y%m%d") for d in full_close(len(b.info)).index]
     else:
-        from .collector import load_panel
         with db.conn() as c:
-            days = [r[0] for r in c.execute("SELECT date FROM price_days ORDER BY date")]
-        before = [d for d in days if d <= b.base_date]
-        after = [d for d in days if d > b.base_date]
-        if not after:
-            return []
-        panels = load_panel(before[-n_hist:] + after)
-        idx_full = {}
-        for mk in ("KOSPI", "KOSDAQ"):
-            ser = db.index_series(mk)
-            if ser:
-                idx_full[mk] = pd.Series(ser).set_axis(pd.to_datetime(list(ser.keys())))
-    base_ts = pd.Timestamp(b.base_date)
-    after = [d for d in panels["close"].index if d > base_ts]
-    if len(after) > AFTER_DAILY_MAX:
-        after = after[::-1][::5][::-1]  # 오늘(마지막 거래일)부터 5거래일 간격
-    tks = [t for t in b.info.index if t in panels["close"].columns]
-    c0 = b.close.iloc[-1].reindex(tks)
-    for d in after:
-        win = {k: v.loc[:d, tks].iloc[-n_hist:] for k, v in panels.items()}
-        cd = win["close"].ffill().iloc[-1]
-        ratio = (cd / c0).where(lambda x: x > 0)
-        info = b.info.loc[tks].copy()
-        if "shares" in info:
-            info["mcap"] = info["shares"] * cd
-        for col in ("per", "pbr"):
-            if col in info:
-                info[col] = info[col] * ratio
-        if "div" in info:
-            info["div"] = info["div"] / ratio
-        yield Bundle(base_date=d.strftime("%Y%m%d"), close=win["close"], open=win["open"], high=win["high"],
-                     low=win["low"], volume=win["volume"], value=win["value"], info=info,
-                     index_close={k: v[v.index <= d].iloc[-n_hist:] for k, v in idx_full.items()},
-                     market_foreign20=b.market_foreign20, fx=b.fx, dps_hist=b.dps_hist, pbr_hist=b.pbr_hist,
-                     fin=b.fin, admin=set(), sources=b.sources, warnings=[], demo=b.demo), len(after)
+            days = [r[0] for r in c.execute("SELECT date FROM price_days WHERE date > ? ORDER BY date", (b.base_date,))]
+    days = [d for d in days if d > b.base_date and d not in have]
+    return history.score_days(days, log, b.demo, extra=[b]) if days else 0
 
 
-def _score_after_days(b, sst, hold, excl, log):
-    """기준일 다음 날부터 오늘까지 날짜별 점수를 만들어 점수 추이에 쓴다."""
-    db.delete_bt_days(b.base_date)
-    n = 0
-    manual = db.manual_scores()
-    for bd, total in _after_bundles(b):
-        n += 1
-        log(f"기준일 이후 점수 생성 중 {n}/{total} ({bd.base_date})")
-        results, _ = score_universe(bd, sst, hold, excl, manual)
-        sid = db.scan_start(sst["profile"], "bt-day", b.demo, kind="btd", req_date=b.base_date)
-        db.save_scores(sid, results, with_detail=False)
-        db.scan_update(sid, status="done", finished_at=db.now(), base_date=bd.base_date, n_scored=len(results),
-                       message="투자검증 이후 날짜 점수")
-    return n
+def run_rescore_year(trigger="criteria"):
+    """점수 기준이 바뀌었을 때: 저장된 데이터만으로(API 호출 없음) 최근 1년 점수를 모든 프로파일로 다시 계산한다.
+    1) 마지막 스캔 데이터로 재계산(새 기록) 2) 투자검증 기준일 결과 다시 계산 3) 최근 1년 거래일별 점수."""
+    if not _running.acquire(blocking=False):
+        db.save_raw_settings({"rescore_pending": "1"})  # 지금 스캔이 끝나면 이어서 한다
+        return None
+    try:
+        db.save_raw_settings({"rescore_pending": "0", "rescore_started_at": db.now()})
+        live = db.latest_scan()
+        demo = bool(live and live.get("demo"))
+        scan_id = db.scan_start(db.active_profile(), "rescore-" + trigger, demo, kind="rc")
+
+        def log(msg):
+            db.scan_update(scan_id, message=msg)
+            print(f"[1년 재계산 {scan_id}] {msg}", flush=True)
+
+        try:
+            done = set()
+            b = _load_bundle()
+            if b is not None and bool(b.demo) == demo:
+                log(f"마지막 스캔 데이터({b.base_date}) 재계산 중…")
+                sid = db.scan_start(db.active_profile(), "recalc", demo)
+                results, u = _score_save(sid, b, "live")
+                LAST.update(bundle=b, universe=u, scan_id=sid)
+                env = {mk: {k: v for k, v in e.items() if k != "conds"} | {"conds": e["conds"]} for mk, e in u["env"].items()}
+                db.scan_update(sid, status="done", finished_at=db.now(), base_date=b.base_date, n_scored=len(results),
+                               message="완료 (점수 기준 변경, 저장 데이터로 재계산)",
+                               env=json.dumps({"env": env, "sources": b.sources}, ensure_ascii=False, default=float),
+                               warnings=json.dumps(b.warnings, ensure_ascii=False))
+                done.add(b.base_date)
+            for s in db.bt_scans():
+                path = bt_bundle_path(s["base_date"])
+                if bool(s["demo"]) != demo or not os.path.exists(path):
+                    continue
+                log(f"투자검증 기준일 {s['base_date']} 다시 계산 중…")
+                bb = history.load_bundle(path)
+                db.delete_scan_scores(s["id"])
+                results, _ = _score_save(s["id"], bb, "bt")
+                db.scan_update(s["id"], finished_at=db.now(), n_scored=len(results))
+                done.add(s["base_date"])
+            days = [d for d in history.year_days(demo) if d not in done]
+            n = history.score_days(days, log, demo, extra=[b] if b is not None and bool(b.demo) == demo else None)
+            db.scan_update(scan_id, status="done", finished_at=db.now(), n_scored=n + len(done),
+                           message=f"완료 (최근 1년 {n + len(done)}개 날짜, 전 프로파일 재계산 · 저장 데이터 사용)")
+        except Exception as e:
+            traceback.print_exc()
+            msg = str(e) if isinstance(e, RuntimeError) else f"{type(e).__name__}: {e}"
+            db.scan_update(scan_id, status="failed", finished_at=db.now(), message=msg[:1000])
+        return scan_id
+    finally:
+        _running.release()
+        _start_pending()
+
+
+def run_rescore_year_async(trigger="criteria"):
+    """진행 중인 스캔이 있으면 끝난 뒤 자동으로 시작되도록 예약한다. 바로 시작했으면 True."""
+    if is_running():
+        db.save_raw_settings({"rescore_pending": "1"})
+        return False
+    threading.Thread(target=run_rescore_year, args=(trigger,), daemon=True).start()
+    return True
 
 
 def run_backtest_async(req_date, mode="fetch"):
@@ -274,7 +318,7 @@ def run_async(trigger="manual", demo=False):
 
 def rescore(ticker):
     """수동 점수 변경 후 마지막 스캔 데이터로 해당 종목만 다시 계산한다."""
-    from .scoring import Ctx, ind, score_ticker
+    from .scoring import Ctx, ind, item_scores, score_ticker, signal_flags
     b, u, sid = LAST["bundle"], LAST["universe"], LAST["scan_id"]
     latest = db.latest_scan()
     if b is None and latest:  # 프로그램 재시작 후에는 저장된 데이터를 불러온다
@@ -289,8 +333,19 @@ def rescore(ticker):
     if b is None or ticker not in b.info.index or ticker not in b.close.columns:
         return False
     t = Ctx(ticker, b, u)
-    res = score_ticker(t, db.scoring_settings(), db.manual_scores().get(ticker, {}))
-    res.update({"ticker": ticker, "name": t.info.get("name", ticker), "market": t.market, "sector": t.sector,
-                "close": float(t.c.iloc[-1]), "mcap": t.mcap, "chg": float(ind.ret(t.c, 1) or 0)})
-    db.save_scores(sid, [res])
+    st = db.settings()
+    mt = db.manual_scores().get(ticker, {})
+    items = item_scores(t, mt)
+    flags = signal_flags(t, items)
+    meta = {"ticker": ticker, "name": t.info.get("name", ticker), "market": t.market, "sector": t.sector,
+            "close": float(t.c.iloc[-1]), "mcap": t.mcap, "chg": float(ind.ret(t.c, 1) or 0)}
+    res = {}
+    for p, sst in db.scoring_settings_all(st).items():
+        r = score_ticker(t, sst, mt, items, flags)
+        r.update(meta, profile=p)
+        res[p] = [r]
+    sc = db.scan(sid) or {}
+    db.save_scores(sid, [r for rs in res.values() for r in rs], items_profile=sc.get("profile"))
+    if sc.get("base_date"):
+        db.save_days(sc["base_date"], res, "live")
     return True

@@ -66,6 +66,12 @@ async function recalc() {  // 데이터 조회 없이 현재 설정·가중치�
   alert(j.message);
   if (j.ok) { if (location.pathname === '/scans' || location.pathname === '/') pollScan(); else location.href = '/scans'; }
 }
+async function rescoreYear() {
+  if (!confirm('저장된 데이터로 최근 1년 날짜별 점수를 모든 프로파일로 다시 계산합니다.\n데이터를 새로 받지 않으며, 컴퓨터 성능에 따라 수 분~수십 분 걸립니다. 시작할까요?')) return;
+  const j = await postJSON('/api/rescore', {});
+  alert(j.message);
+  if (j.ok) pollScan();
+}
 async function pollScan() {
   const el = document.getElementById('scan-status');
   const r = await (await fetch('/api/scan/status')).json();

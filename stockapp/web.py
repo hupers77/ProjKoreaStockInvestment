@@ -53,6 +53,25 @@ def common():
             "blog_url": BLOG_URL, "docs_url": DOCS_URL}
 
 
+def _view(scan):
+    """스캔을 지금 적용 프로파일 기준으로 보여 준다 (예전 스캔은 그 스캔의 프로파일)."""
+    if scan:
+        scan = dict(scan, run_profile=scan["profile"])
+        scan["profile"] = db.view_profile(scan["id"])
+    return scan
+
+
+def _prev_map(scan, n=1):
+    """n거래일 전 같은 프로파일 점수 {티커: 점수}. 일자별 점수(현재 기준으로 계산)를 우선 쓰고, 없으면 직전 스캔."""
+    if scan and scan.get("base_date"):
+        d = db.trading_day_before(scan["base_date"], n)
+        m = db.day_scores(d, scan["profile"]) if d else {}
+        if m or n > 1:
+            return m
+    p = db.prev_scan(scan["id"]) if scan else None
+    return {r["ticker"]: r["final"] for r in db.scores(p["id"], scan["profile"])} if p else {}
+
+
 def _fmt_date(d):
     return f"{d[:4]}-{d[4:6]}-{d[6:]}" if d and len(d) == 8 else (d or "-")
 
@@ -79,22 +98,21 @@ def favicon():
 
 @app.route("/")
 def dashboard():
-    scan = db.latest_scan()
-    last = db.latest_scan(done_only=False)
+    scan = _view(db.latest_scan())
+    # 진행 상태·실패 표시: 정기·수동 스캔과 과거 점수 계산(1년 재계산·빠진 날짜) 중 최근 것
+    last = max([x for x in (db.latest_scan(done_only=False), db.latest_scan(done_only=False, kind="rc")) if x],
+               key=lambda x: x["id"], default=None)
     rows, prev_map, env, warnings = [], {}, {}, []
     if scan:
-        rows = db.scores(scan["id"])
-        p = db.prev_scan(scan["id"])
-        if p:
-            prev_map = {r["ticker"]: r["final"] for r in db.scores(p["id"])}
+        rows = db.scores(scan["id"], scan["profile"])
+        prev_map = _prev_map(scan)
         meta = json.loads(scan["env"] or "{}")
         env = meta.get("env", {})
         warnings = json.loads(scan["warnings"] or "[]")
     holds = {h["ticker"]: h for h in db.holdings()}
     excl = {e["ticker"] for e in db.exclusions()}
     # 5거래일 전 점수 (같은 프로파일). 5일 사이 +10점 이상 오른 종목은 이후 5일 평균 -2.1% (백테스트)
-    p5 = db.scan_days_ago(scan["base_date"], 5, scan["profile"]) if scan and scan["base_date"] else None
-    map5 = {x["ticker"]: x["final"] for x in db.scores(p5["id"])} if p5 else {}
+    map5 = _prev_map(scan, 5) if scan else {}
     for r in rows:
         fl = list(r.get("flags") or [])
         v5 = map5.get(r["ticker"])
@@ -141,17 +159,17 @@ def dashboard():
 def stock(ticker):
     """종목 상세. ?scan=ID로 과거 기준일(투자검증 포함) 시점의 평가를 볼 수 있다."""
     sid = request.args.get("scan", type=int)
-    scan = db.scan(sid) if sid else db.latest_scan()
+    scan = _view(db.scan(sid) if sid else db.latest_scan())
     if not scan or scan["status"] != "done":
         return redirect(url_for("dashboard"))
     bt = scan.get("kind") == "bt"
-    r = db.score_detail(scan["id"], ticker)
+    r = db.score_detail(scan["id"], ticker, scan["profile"])
     if not r or not r["detail"]:
         abort(404)
     base = scan["base_date"]
     meta = json.loads(scan["env"] or "{}")
     since = (datetime.strptime(base, "%Y%m%d") - timedelta(days=365)).strftime("%Y%m%d")
-    hist = db.score_history(ticker, since=since)  # 기준일 1년 전부터 오늘까지 있는 점수 모두
+    hist = db.score_history(ticker, since=since, profile=scan["profile"])  # 기준일 1년 전부터 오늘까지 일자별 점수
     manual = db.manual_scores().get(ticker, {})
     holding = next((h for h in db.holdings() if h["ticker"] == ticker), None)
     excluded = any(e["ticker"] == ticker for e in db.exclusions())
@@ -178,7 +196,7 @@ def stock(ticker):
     if bt:
         from . import verify as vf
         live = db.latest_scan()
-        nw = db.score_detail(live["id"], ticker) if live else None
+        nw = db.score_detail(live["id"], ticker, scan["profile"]) if live else None
         res = {"now": nw, "eval_date": px_after[-1]["date"] if px_after else None}
         if px_after and r["close"]:
             cl = [x["close"] for x in px_after]
@@ -207,7 +225,7 @@ def verify():
     date = raw if len(raw) == 8 and raw.isdigit() else vf.default_date(prof)
     today = datetime.now().strftime("%Y%m%d")
     bad_date = date >= today
-    scan = None if bad_date else db.bt_scan(date)
+    scan = None if bad_date else _view(db.bt_scan(date))
     last = db.latest_scan(done_only=False, kind="bt")
     fail = last if last and last["status"] == "failed" and last.get("req_date") == date and \
         (not scan or last["id"] > scan["id"]) else None
@@ -218,11 +236,11 @@ def verify():
            "live": db.latest_scan(), "changed": False}
     if not scan:
         return render_template("verify.html", **ctx)
-    rows = db.scores(scan["id"])
+    rows = db.scores(scan["id"], scan["profile"])
     after, eval_date = vf.after_stats(scan["base_date"], scan["demo"])
     idx = vf.index_returns(scan["base_date"], eval_date, scan["demo"])
     live = ctx["live"]
-    now_map = {r["ticker"]: r for r in db.scores(live["id"])} if live else {}
+    now_map = {r["ticker"]: r for r in db.scores(live["id"], scan["profile"])} if live else {}
     holds = {h["ticker"]: h for h in db.holdings()}
     slim = []
     for r in rows:
@@ -352,6 +370,26 @@ def support():
                            sponsors_url=SPONSORS_URL)
 
 
+def _after_criteria_change(before):
+    """점수 기준값(가중치·제외 기준·게이트)이 바뀌었으면 최근 1년 점수를 저장된 데이터로 다시 계산한다.
+    프로파일 선택만 바꾼 경우는 모든 프로파일 점수가 이미 있으므로 다시 계산하지 않는다.
+    돌려주는 값(화면 안내용): 1 = 저장만, 2 = 재계산 시작, 3 = 진행 중인 스캔 뒤 재계산 예약"""
+    if db.criteria_snapshot() == before:
+        return 1
+    db.save_raw_settings({"scoring_changed_at": db.now()})
+    return 2 if scanner.run_rescore_year_async("criteria") else 3
+
+
+@app.post("/api/rescore")
+def api_rescore():
+    """최근 1년 점수를 저장된 데이터로 모든 프로파일 다시 계산 (데이터를 새로 받지 않음)."""
+    if not scanner.saved_bundle_info() and not scanner.history.stored_bundles():
+        return jsonify(ok=False, message="계산에 쓸 저장 데이터가 없습니다. 먼저 '지금 스캔'을 한 번 실행하세요.")
+    started = scanner.run_rescore_year_async("manual")
+    return jsonify(ok=True, message="최근 1년 점수 재계산을 시작했습니다." if started
+                   else "진행 중인 스캔이 끝나면 최근 1년 점수 재계산을 시작합니다.")
+
+
 @app.route("/criteria", methods=["GET", "POST"])
 def criteria():
     st = db.settings()
@@ -369,9 +407,9 @@ def criteria():
                 d[f"p{p}.w.{iid}"] = max(0.0, min(50.0, float(v)))
             except ValueError:
                 d[f"p{p}.w.{iid}"] = db.default_weight(p, iid)
-        d["scoring_changed_at"] = db.now()
+        before = db.criteria_snapshot()
         db.save_raw_settings(d)
-        return redirect(url_for("criteria", p=p, saved=1))
+        return redirect(url_for("criteria", p=p, saved=_after_criteria_change(before)))
     groups = {g: [ITEM_MAP[i[0]] for i in ITEMS if i[1] == g] for g in PERSPECTIVES}
     from .scoring import DISABLED, RULES
     auto = set(RULES) - set(DISABLED)
@@ -384,6 +422,7 @@ def criteria():
 @app.route("/settings", methods=["GET", "POST"])
 def settings():
     if request.method == "POST":
+        before = db.criteria_snapshot()
         f = request.form
         d = {k: f.get(k, "").strip() for k in ("scan_time", "profile", "krx_id", "dart_key")}
         d["scan_enabled"] = "1" if f.get("scan_enabled") else "0"
@@ -402,10 +441,9 @@ def settings():
                     raw[f"p{pk}.{k}"] = float(v)
                 except ValueError:
                     pass
-        raw["scoring_changed_at"] = db.now()
         db.save_raw_settings(raw)
         schedule()
-        return redirect(url_for("settings", saved=1))
+        return redirect(url_for("settings", saved=_after_criteria_change(before)))
     st = db.settings()
     return render_template("settings.html", st=st, crit=db.profile_criteria(st), saved=request.args.get("saved"))
 
@@ -484,12 +522,11 @@ def api_export():
     from . import export
     j = request.get_json(force=True)
     fmt = j.get("fmt", "csv")
-    scan = db.latest_scan()
+    scan = _view(db.latest_scan())
     if not scan or fmt not in ("csv", "xlsx", "md"):
         abort(400)
-    scores = db.scores(scan["id"])
-    p = db.prev_scan(scan["id"])
-    prev_map = {r["ticker"]: r["final"] for r in db.scores(p["id"])} if p else {}
+    scores = db.scores(scan["id"], scan["profile"])
+    prev_map = _prev_map(scan)
     held = {h["ticker"] for h in db.holdings()}
     rows = export.build_rows(scores, j.get("tickers") or [], prev_map, held)
     bd = scan["base_date"] or ""
